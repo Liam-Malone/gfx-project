@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 const Arena = std.heap.ArenaAllocator;
@@ -14,7 +15,6 @@ fn connect_display(arena: Allocator) !std.net.Stream {
     const wayland_display = posix.getenv("WAYLAND_DISPLAY") orelse return error.NoWaylandDisplay;
 
     const display_path = try fs.path.join(arena, &.{ xdg_runtime_dir, wayland_display });
-    defer arena.free(display_path);
     wl_log.info("Attempting to connect to Wayland display at: {s}\n", .{display_path});
     const stream = try std.net.connectUnixSocket(display_path);
     return stream;
@@ -26,7 +26,7 @@ fn connect_display(arena: Allocator) !std.net.Stream {
 // 2 Bytes: method opcode
 // 2 Bytes: size of message
 // Arguments to method, if any
-const Header = packed struct(u64) {
+const Header = packed struct {
     id: u32,
     op: u16,
     size: u16,
@@ -76,6 +76,7 @@ const EventIt = struct {
             return error.RemoteClosed;
         }
         iter.buf.end += bytes_read;
+        std.debug.print(".... here we go: \n{s}\n\n", .{iter.buf.data[0..iter.buf.end]});
     }
 
     pub fn next(iter: *EventIt) !?Event {
@@ -108,7 +109,7 @@ const EventIt = struct {
                     .revents = 0,
                 }};
                 const bytes_ready = try std.posix.poll(&poll, 1); // 0 seems to just never read successfully
-                break :blk bytes_ready != 0;
+                break :blk bytes_ready > 0;
             };
 
             if (data_in_stream) {
@@ -129,29 +130,30 @@ const WaylandID = struct {
     next_id: u32 = wayland.ObjectIDs.registry,
 
     pub fn next(self: *WaylandID) u32 {
-        const ret = self.next_id;
-        self.next_id += 1;
-        return ret;
+        defer self.next_id += 1;
+        return self.next_id;
     }
 };
 
-fn get_registry(stream: std.net.Stream, new_id: u32) !void {
-    const GetRegistryMessage = struct {
-        header: Header,
-        new_id: u32,
-    };
+const GetRegistryMessage = packed struct {
+    header: Header,
+    new_id: u32,
 
+    pub const Size: usize = @sizeOf(GetRegistryMessage);
+};
+fn get_registry(stream: std.net.Stream, new_id: u32) !void {
+    std.debug.print("id: {d}\n", .{new_id});
     const msg: GetRegistryMessage = .{
         .header = .{
             .id = new_id,
             .op = 2,
-            .size = @sizeOf(GetRegistryMessage),
+            .size = GetRegistryMessage.Size,
         },
         .new_id = new_id,
     };
 
-    const bytes = try stream.writer().write(std.mem.asBytes(&msg));
-    std.debug.assert(bytes == @sizeOf(GetRegistryMessage));
+    const bytes = try posix.write(stream.handle, std.mem.asBytes(&msg));
+    std.debug.print("Sizeof: {d}, .Size: {d}, bytes: {d}\n", .{ @sizeOf(GetRegistryMessage), GetRegistryMessage.Size, bytes });
 }
 
 fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
@@ -254,16 +256,25 @@ pub fn main() !void {
 
     const stream = try connect_display(arena_allocator);
     defer stream.close();
-
-    var id = WaylandID{};
-    try get_registry(stream, id.next());
+    // const stream_writer = stream.writer();
 
     var res_iter: EventIt = .{
         .stream = stream,
     };
 
+    // var id: WaylandID = .{};
+    try get_registry(stream, 2);
+
     while (try res_iter.next()) |ev| {
         try stdout.print("  :: Header: ID -> {d}, OpCode -> {d}, size -> {d}\n", .{ ev.header.id, ev.header.op, ev.header.size });
-        try registry_global_handle(ev);
+        switch (ev.header.id) {
+            wayland.ObjectIDs.display => {},
+            wayland.ObjectIDs.registry => {
+                try registry_global_handle(ev);
+            },
+            else => wl_log.warn("Unknown ID: {d}", .{ev.header.id}),
+        }
     }
+
+    try stdout.print("Exiting now!\n", .{});
 }
