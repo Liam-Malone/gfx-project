@@ -9,30 +9,15 @@ const wl_log = std.log.scoped(.Wayland);
 
 const wayland = @import("wayland.zig");
 
-fn connect_socket(arena: Allocator) !posix.socket_t {
+fn connect_display(arena: Allocator) !std.net.Stream {
     const xdg_runtime_dir = posix.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntime;
     const wayland_display = posix.getenv("WAYLAND_DISPLAY") orelse return error.NoWaylandDisplay;
 
-    const display_socket_path = try fs.path.join(arena, &.{ xdg_runtime_dir, wayland_display });
-    defer arena.free(display_socket_path);
-    const socket = try posix.socket(posix.system.AF.UNIX, posix.system.SOCK.STREAM, 0);
-
-    var sock_path: [108]u8 = undefined;
-    @memset(&sock_path, 0);
-    if (display_socket_path.len > sock_path.len) {
-        return error.SocketPathTooLong;
-    }
-
-    @memcpy(sock_path[0..display_socket_path.len], display_socket_path);
-
-    const socket_addr: posix.system.sockaddr.un = .{
-        .path = sock_path,
-    };
-
-    wl_log.info("Attempting to connect to socket: {s}\n", .{socket_addr.path});
-
-    try posix.connect(socket, @ptrCast(&socket_addr), @sizeOf(@TypeOf(socket_addr)));
-    return socket;
+    const display_path = try fs.path.join(arena, &.{ xdg_runtime_dir, wayland_display });
+    defer arena.free(display_path);
+    wl_log.info("Attempting to connect to Wayland display at: {s}\n", .{display_path});
+    const stream = try std.net.connectUnixSocket(display_path);
+    return stream;
 }
 
 // Wayland Wire communication
@@ -41,32 +26,107 @@ fn connect_socket(arena: Allocator) !posix.socket_t {
 // 2 Bytes: method opcode
 // 2 Bytes: size of message
 // Arguments to method, if any
-const Header = packed struct {
+const Header = packed struct(u64) {
     id: u32,
     op: u16,
     size: u16,
+
+    const Size = @sizeOf(Header);
 };
 
-const RegistryMember = struct {
-    id: u32,
-    version: u32,
-    name: []const u8,
+const Event = struct {
+    header: Header,
+    data: []const u8,
 };
-const Registry = struct {
-    map: std.AutoHashMap(u32, RegistryMember),
 
-    pub fn init(arena: Allocator) !Registry {
-        var reg: Registry = .{ .map = .init(arena) };
-        reg.map.put(0, .{
-            .id = 1,
-            .version = 1,
-        });
-        return reg;
+const EventIt = struct {
+    stream: std.net.Stream,
+    buf: ShiftBuf = .{},
+
+    // Need to solve problem of reading a partial header or partial data stream
+    // Buffer -> [ _ _ _ _ _ ]
+    // Fill =>   [ x y z w x ]
+    // Shift =>  [ x _ _ _ _ ]
+    // Fill =>   [ x y z w u ]
+    //
+    // Read into buffer happens into offset pointer
+    // Read from buffer happend from start of buffer
+    const ShiftBuf = struct {
+        data: [4096]u8 = undefined,
+        start: usize = 0,
+        end: usize = 0,
+
+        pub fn shift(sb: *ShiftBuf) void {
+            std.mem.copyForwards(u8, &sb.data, sb.data[sb.start..]);
+            sb.end -= sb.start;
+            sb.start = 0;
+        }
+    };
+
+    pub fn init(stream: std.net.Stream) EventIt {
+        return .{
+            .stream = stream,
+        };
+    }
+
+    pub fn load_events(iter: *EventIt) !void {
+        iter.buf.shift();
+        const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]);
+        if (bytes_read == 0) {
+            return error.RemoteClosed;
+        }
+        iter.buf.end += bytes_read;
+    }
+
+    pub fn next(iter: *EventIt) !?Event {
+        while (true) {
+            const buffered_ev = blk: {
+                const header_end = iter.buf.start + Header.Size;
+                if (header_end > iter.buf.end) break :blk null;
+
+                const header = std.mem.bytesToValue(Header, iter.buf.data[iter.buf.start..header_end]);
+
+                const data_end = iter.buf.start + header.size;
+                if (data_end > iter.buf.end) {
+                    if (iter.buf.start == 0) return error.BufTooSmol;
+                    break :blk null;
+                }
+                defer iter.buf.start = data_end;
+
+                break :blk .{
+                    .header = header,
+                    .data = iter.buf.data[header_end..data_end],
+                };
+            };
+
+            if (buffered_ev) |ev| return ev;
+
+            const data_in_stream = blk: {
+                var poll: [1]std.posix.pollfd = [1]std.posix.pollfd{.{
+                    .fd = iter.stream.handle,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                }};
+                const bytes_ready = try std.posix.poll(&poll, 1); // 0 seems to just never read successfully
+                break :blk bytes_ready != 0;
+            };
+
+            if (data_in_stream) {
+                iter.load_events() catch |err| {
+                    wl_log.warn("!stream closed! :: {any}", .{err});
+                    return null;
+                };
+            } else {
+                return null;
+            }
+        }
     }
 };
 
+/// Display ID occupies 1 to begin with
+/// Wayland IDs are required to always be 1 higher than the previously assigned ID
 const WaylandID = struct {
-    next_id: u32 = 2,
+    next_id: u32 = wayland.ObjectIDs.registry,
 
     pub fn next(self: *WaylandID) u32 {
         const ret = self.next_id;
@@ -75,7 +135,7 @@ const WaylandID = struct {
     }
 };
 
-fn get_registry(socket: posix.socket_t, new_id: u32) !void {
+fn get_registry(stream: std.net.Stream, new_id: u32) !void {
     const GetRegistryMessage = struct {
         header: Header,
         new_id: u32,
@@ -83,42 +143,45 @@ fn get_registry(socket: posix.socket_t, new_id: u32) !void {
 
     const msg: GetRegistryMessage = .{
         .header = .{
-            .id = wayland.wl_display_get_registry_opcode,
-            .op = wayland.wl_display_get_registry_opcode,
+            .id = new_id,
+            .op = 2,
             .size = @sizeOf(GetRegistryMessage),
         },
         .new_id = new_id,
     };
-    _ = try posix.write(socket, std.mem.asBytes(&msg));
+
+    const bytes = try stream.writer().write(std.mem.asBytes(&msg));
+    std.debug.assert(bytes == @sizeOf(GetRegistryMessage));
 }
 
 fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
-    return ((val - 1 / mul + 1) * mul);
+    return if (val == 0) 0 else ((val - 1 / mul + 1) * mul);
 }
 
 const MsgParser = struct {
     buf: []const u8,
 
     pub fn getU32(mp: *MsgParser) !u32 {
-        if (mp.buf.len < @sizeOf(u32)) {
+        if (mp.buf.len < 4) {
             return error.InvalidLength;
         }
 
-        const val = std.mem.bytesAsValue(u32, mp.buf[0..4]).*;
+        const val = std.mem.bytesToValue(u32, mp.buf[0..4]);
         mp.consume(4);
         return val;
     }
     pub fn getString(mp: *MsgParser) ![]const u8 {
-        if (mp.buf.len < @sizeOf(u32)) {
+        if (mp.buf.len < 4) {
             return error.InvalidLength;
         }
 
-        const msg_len = std.mem.bytesAsValue(u32, &mp.buf).*;
-        const consume_len = @sizeOf(u32) + msg_len;
+        const msg_len = std.mem.bytesToValue(u32, mp.buf[0..4]);
+        const consume_len = 4 + msg_len;
         if (consume_len > mp.buf.len) {
             return error.InvalidLength;
         }
-        const str = mp.buf[4..];
+
+        const str = mp.buf[4 .. 4 + msg_len];
         mp.consume(consume_len);
         return str;
     }
@@ -131,6 +194,18 @@ const MsgParser = struct {
     }
 };
 
+fn parse_data_response(comptime T: type, data: []const u8) !T {
+    var ret: T = undefined;
+    var iter: MsgParser = .{ .buf = data };
+    inline for (std.meta.fields(T)) |field| {
+        @field(ret, field.name) = switch (field.type) {
+            u32 => try iter.getU32(),
+            []const u8 => try iter.getString(),
+            else => @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type }),
+        };
+    }
+    return ret;
+}
 const DisplayError = struct {
     obj_id: u32,
     code: u32,
@@ -146,58 +221,25 @@ const DisplayError = struct {
     }
 };
 
-const WlEventIt = struct {
-    buf: []const u8,
-
-    pub const WlEvent = struct {
-        header: Header,
-        data: []const u8,
-    };
-    pub fn next(iter: *WlEventIt) ?WlEvent {
-        const HeaderSize = @sizeOf(Header);
-
-        if (iter.buf.len < HeaderSize) {
-            return null;
-        }
-
-        const header = std.mem.bytesAsValue(Header, iter.buf[0..HeaderSize]);
-        if (iter.buf.len < header.size) {
-            return null;
-        }
-
-        const data = iter.buf[HeaderSize..header.size];
-        iter.consume(header.size);
-
-        return .{
-            .header = header.*,
-            .data = data,
-        };
-    }
-    fn consume(iter: *WlEventIt, len: usize) void {
-        if (iter.buf.len == len) {
-            iter.buf = &.{};
-        } else {
-            iter.buf = iter.buf[len..];
-        }
-    }
+const RegistryGlobal = struct {
+    name: u32,
+    interface: []const u8,
+    version: u32,
 };
 
-fn display_event_handle(ev: WlEventIt.WlEvent) !void {
+fn registry_global_handle(ev: Event) !void {
     switch (ev.header.op) {
         0 => {
-            const err: DisplayError = try .init(ev.data);
-            wl_log.warn("wl_display :: Error: object: {d}, code: {d}, msg: {s}", .{
-                err.obj_id,
-                err.code,
-                err.msg,
+            wl_log.warn("wl_registry::global uninmplemented handler", .{});
+            const global: RegistryGlobal = try parse_data_response(RegistryGlobal, ev.data);
+            wl_log.info("wl_registry::global ==> name: {d}, interface: {s}, version: {d}", .{
+                global.name,
+                global.interface,
+                global.version,
             });
         },
-        1 => {
-            wl_log.warn("wl_display :: delete id -- unhandled", .{});
-        },
-        else => {
-            wl_log.warn("wl_display :: unrecognized ev opcode: {d}", .{ev.header.op});
-        },
+        1 => wl_log.warn("wl_registry::global_remove uninmplemented handler", .{}),
+        else => wl_log.warn("wl_display :: unrecognized ev opcode: {d}", .{ev.header.op}),
     }
 }
 
@@ -210,54 +252,18 @@ pub fn main() !void {
     defer arena.deinit();
     const arena_allocator: Allocator = arena.allocator();
 
-    const socket = try connect_socket(arena_allocator);
+    const stream = try connect_display(arena_allocator);
+    defer stream.close();
 
     var id = WaylandID{};
-    try get_registry(socket, id.next());
+    try get_registry(stream, id.next());
 
-    var buf: [2048]u8 = undefined;
-    @memset(&buf, 0);
-    const res_len = try posix.read(socket, &buf);
-    var res_iter: WlEventIt = .{
-        .buf = buf[0..res_len],
+    var res_iter: EventIt = .{
+        .stream = stream,
     };
 
-    while (res_iter.next()) |ev| {
-        try stdout.print("  :: Header: {any}\n", .{ev.header});
-        switch (ev.header.id) {
-            1 => try display_event_handle(ev),
-            2 => {
-                const ProtocolRegData = struct {
-                    id: u32,
-                    version: u32,
-                    protocol_name: []const u8,
-                };
-
-                const str_buf = ev.data[@sizeOf(u64)..];
-                var str_len: usize = str_buf.len;
-                for (str_buf, 0..) |char, idx| {
-                    if (char == 0) {
-                        str_len = idx;
-                        break;
-                    }
-                }
-
-                const data: ProtocolRegData = .{
-                    .id = std.mem.bytesAsValue(u32, ev.data[0..@sizeOf(u32)]).*,
-                    .version = std.mem.bytesAsValue(u32, ev.data[@sizeOf(u32)..@sizeOf(u64)]).*,
-                    .protocol_name = str_buf[0..str_len],
-                };
-
-                if (std.mem.eql(u8, "wl_seat", data.protocol_name)) {
-                    try stdout.print("\n\nHit wl_seat\n\n", .{});
-                }
-                try stdout.print("  :: Data: registery id = {d}, protocol name = {s}, version = {d}\n\n", .{
-                    data.id,
-                    data.protocol_name,
-                    data.version,
-                });
-            },
-            else => {},
-        }
+    while (try res_iter.next()) |ev| {
+        try stdout.print("  :: Header: ID -> {d}, OpCode -> {d}, size -> {d}\n", .{ ev.header.id, ev.header.op, ev.header.size });
+        try registry_global_handle(ev);
     }
 }

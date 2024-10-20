@@ -12,6 +12,11 @@ pub const Registry = struct {
     pub const EventGlobal: u16 = 0;
 };
 
+pub const ObjectIDs = struct {
+    pub const registry = 2;
+    pub const display = 1;
+};
+
 pub const wl_registry_bind_opcode: u16 = 0;
 pub const wl_surface_commit_opcode: u16 = 6;
 pub const wl_compositor_create_surface_opcode: u16 = 0;
