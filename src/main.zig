@@ -20,12 +20,12 @@ fn connect_display(arena: Allocator) !std.net.Stream {
     return stream;
 }
 
-// Wayland Wire communication
-//
-// 4 Bytes: ID of resource to call methods on
-// 2 Bytes: method opcode
-// 2 Bytes: size of message
-// Arguments to method, if any
+/// Wayland Wire communication
+///
+/// 4 Bytes: ID of resource to call methods on
+/// 2 Bytes: method opcode
+/// 2 Bytes: size of message
+/// Follow with any arguments to method
 const Header = packed struct {
     id: u32,
     op: u16,
@@ -34,11 +34,17 @@ const Header = packed struct {
     const Size = @sizeOf(Header);
 };
 
+/// Wayland Wire Event
+///
+/// Composed of Header + Data Buffer
 const Event = struct {
     header: Header,
     data: []const u8,
 };
 
+/// Event Iterator
+///
+/// Contains Data Stream & Shifting Buffer
 const EventIt = struct {
     stream: std.net.Stream,
     buf: ShiftBuf = .{},
@@ -57,7 +63,10 @@ const EventIt = struct {
         end: usize = 0,
 
         pub fn shift(sb: *ShiftBuf) void {
+            wl_log.debug("  Event Iterator :: Shift Buf :: Shift Begin", .{});
             std.mem.copyForwards(u8, &sb.data, sb.data[sb.start..]);
+            wl_log.debug("  Event Iterator :: Shift Buf :: Zero-ing out shifted bytes", .{});
+            @memset(sb.data[sb.start..], 0);
             sb.end -= sb.start;
             sb.start = 0;
         }
@@ -70,24 +79,34 @@ const EventIt = struct {
     }
 
     pub fn load_events(iter: *EventIt) !void {
+        wl_log.info("Event Iterator :: Loading Events", .{});
         iter.buf.shift();
-        const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]);
+        wl_log.debug("Event Iterator :: Load Events :: Shift Complete ==> Reading Bytes", .{});
+        const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]); // This is hanging
+        wl_log.debug("Event Iterator :: Load Events :: Read {d} Bytes", .{bytes_read});
         if (bytes_read == 0) {
             return error.RemoteClosed;
         }
         iter.buf.end += bytes_read;
-        std.debug.print(".... here we go: \n{s}\n\n", .{iter.buf.data[0..iter.buf.end]});
+        wl_log.debug("  Event Iterator :: Event Load :: bytes_read: {d}, buf start: {d}, buf end: {d}", .{ bytes_read, iter.buf.start, iter.buf.end });
     }
 
     pub fn next(iter: *EventIt) !?Event {
         while (true) {
+            wl_log.debug("  Event Iterator :: Next Loop Running", .{});
             const buffered_ev = blk: {
+                wl_log.info("  Event Iterator :: Attempting to use buffered bytes", .{});
                 const header_end = iter.buf.start + Header.Size;
-                if (header_end > iter.buf.end) break :blk null;
+                if (header_end > iter.buf.end) {
+                    wl_log.warn("  Event Iterator :: Partial header encountered", .{});
+                    break :blk null;
+                }
 
                 const header = std.mem.bytesToValue(Header, iter.buf.data[iter.buf.start..header_end]);
+                wl_log.debug("  Event Iterator :: Header Data ==> id: {d}, opcode: {d}, size: {d}", .{ header.id, header.op, header.size });
 
                 const data_end = iter.buf.start + header.size;
+
                 if (data_end > iter.buf.end) {
                     if (iter.buf.start == 0) return error.BufTooSmol;
                     break :blk null;
@@ -103,16 +122,18 @@ const EventIt = struct {
             if (buffered_ev) |ev| return ev;
 
             const data_in_stream = blk: {
-                var poll: [1]std.posix.pollfd = [1]std.posix.pollfd{.{
+                var poll: [1]std.posix.pollfd = [_]std.posix.pollfd{.{
                     .fd = iter.stream.handle,
                     .events = std.posix.POLL.IN,
                     .revents = 0,
                 }};
                 const bytes_ready = try std.posix.poll(&poll, 1); // 0 seems to just never read successfully
+                wl_log.info("  Event Iterator :: next.poll found {d} bytes ready", .{bytes_ready});
                 break :blk bytes_ready > 0;
             };
 
             if (data_in_stream) {
+                wl_log.debug("  Event Iterator :: next.poll found bytes available, should load now", .{});
                 iter.load_events() catch |err| {
                     wl_log.warn("!stream closed! :: {any}", .{err});
                     return null;
@@ -145,8 +166,8 @@ fn get_registry(stream: std.net.Stream, new_id: u32) !void {
     std.debug.print("id: {d}\n", .{new_id});
     const msg: GetRegistryMessage = .{
         .header = .{
-            .id = new_id,
-            .op = 2,
+            .id = wayland.ObjectIDs.display,
+            .op = wayland.OpCodes.display_get_registry,
             .size = GetRegistryMessage.Size,
         },
         .new_id = new_id,
@@ -268,8 +289,12 @@ pub fn main() !void {
     while (try res_iter.next()) |ev| {
         try stdout.print("  :: Header: ID -> {d}, OpCode -> {d}, size -> {d}\n", .{ ev.header.id, ev.header.op, ev.header.size });
         switch (ev.header.id) {
-            wayland.ObjectIDs.display => {},
+            wayland.ObjectIDs.display => {
+                const err: DisplayError = try .init(ev.data);
+                wl_log.err("  :: Display Msg object id: {d}, errcode: {d}, msg: {s}", .{ err.obj_id, err.code, err.msg });
+            },
             wayland.ObjectIDs.registry => {
+                wl_log.info("  :: Registry handle time ::", .{});
                 try registry_global_handle(ev);
             },
             else => wl_log.warn("Unknown ID: {d}", .{ev.header.id}),
