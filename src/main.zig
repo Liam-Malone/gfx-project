@@ -3,19 +3,19 @@ const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 const Arena = std.heap.ArenaAllocator;
-const posix = std.posix;
-const fs = std.fs;
-
-const wl_log = std.log.scoped(.Wayland);
 
 const wayland = @import("wayland.zig");
+const wl_log = std.log.scoped(.Wayland);
 
+/// Connect To Wayland Display
+///
+/// Assumes Arena Allocator -- does not manage own memory
 fn connect_display(arena: Allocator) !std.net.Stream {
-    const xdg_runtime_dir = posix.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntime;
-    const wayland_display = posix.getenv("WAYLAND_DISPLAY") orelse return error.NoWaylandDisplay;
+    const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntime;
+    const wayland_display = std.posix.getenv("WAYLAND_DISPLAY") orelse return error.NoWaylandDisplay;
 
-    const display_path = try fs.path.join(arena, &.{ xdg_runtime_dir, wayland_display });
-    wl_log.info("Attempting to connect to Wayland display at: {s}\n", .{display_path});
+    const display_path = try std.fs.path.join(arena, &.{ xdg_runtime_dir, wayland_display });
+    wl_log.info("  Connect Display :: Attempting to connect to Wayland display at: {s}\n", .{display_path});
     const stream = try std.net.connectUnixSocket(display_path);
     return stream;
 }
@@ -49,24 +49,24 @@ const EventIt = struct {
     stream: std.net.Stream,
     buf: ShiftBuf = .{},
 
-    // Need to solve problem of reading a partial header or partial data stream
-    // Buffer -> [ _ _ _ _ _ ]
-    // Fill =>   [ x y z w x ]
-    // Shift =>  [ x _ _ _ _ ]
-    // Fill =>   [ x y z w u ]
-    //
-    // Read into buffer happens into offset pointer
-    // Read from buffer happend from start of buffer
+    /// Need to solve problem of reading a partial header or partial data stream
+    /// Buffer -> [ _ _ _ _ _ ]
+    /// Fill =>   [ x y z w x ]
+    /// Read Event (xyzw)
+    /// Shift =>  [ x _ _ _ _ ]
+    /// Fill =>   [ x y z w u ]
+    /// Read Event (xyzwu)
+    ///
+    /// Read into buffer happens from offset pointer
+    /// Read from buffer happens from start of buffer
     const ShiftBuf = struct {
         data: [4096]u8 = undefined,
         start: usize = 0,
         end: usize = 0,
 
         pub fn shift(sb: *ShiftBuf) void {
-            wl_log.debug("  Event Iterator :: Shift Buf :: Shift Begin", .{});
             std.mem.copyForwards(u8, &sb.data, sb.data[sb.start..]);
-            wl_log.debug("  Event Iterator :: Shift Buf :: Zero-ing out shifted bytes", .{});
-            @memset(sb.data[sb.start..], 0);
+            @memset(sb.data[sb.start..], 0); // Just in case
             sb.end -= sb.start;
             sb.start = 0;
         }
@@ -81,21 +81,16 @@ const EventIt = struct {
     pub fn load_events(iter: *EventIt) !void {
         wl_log.info("Event Iterator :: Loading Events", .{});
         iter.buf.shift();
-        wl_log.debug("Event Iterator :: Load Events :: Shift Complete ==> Reading Bytes", .{});
-        const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]); // This is hanging
-        wl_log.debug("Event Iterator :: Load Events :: Read {d} Bytes", .{bytes_read});
+        const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]); // This does not hang
         if (bytes_read == 0) {
             return error.RemoteClosed;
         }
         iter.buf.end += bytes_read;
-        wl_log.debug("  Event Iterator :: Event Load :: bytes_read: {d}, buf start: {d}, buf end: {d}", .{ bytes_read, iter.buf.start, iter.buf.end });
     }
 
     pub fn next(iter: *EventIt) !?Event {
         while (true) {
-            wl_log.debug("  Event Iterator :: Next Loop Running", .{});
             const buffered_ev = blk: {
-                wl_log.info("  Event Iterator :: Attempting to use buffered bytes", .{});
                 const header_end = iter.buf.start + Header.Size;
                 if (header_end > iter.buf.end) {
                     wl_log.warn("  Event Iterator :: Partial header encountered", .{});
@@ -103,7 +98,6 @@ const EventIt = struct {
                 }
 
                 const header = std.mem.bytesToValue(Header, iter.buf.data[iter.buf.start..header_end]);
-                wl_log.debug("  Event Iterator :: Header Data ==> id: {d}, opcode: {d}, size: {d}", .{ header.id, header.op, header.size });
 
                 const data_end = iter.buf.start + header.size;
 
@@ -133,9 +127,11 @@ const EventIt = struct {
             };
 
             if (data_in_stream) {
-                wl_log.debug("  Event Iterator :: next.poll found bytes available, should load now", .{});
                 iter.load_events() catch |err| {
-                    wl_log.warn("!stream closed! :: {any}", .{err});
+                    switch (err) {
+                        error.RemoteClosed => wl_log.warn("  Event Iterator :: !stream closed! :: {any}", .{err}),
+                        else => wl_log.warn("  Event Iterator :: Stream Read Error :: {any}", .{err}),
+                    }
                     return null;
                 };
             } else {
@@ -162,8 +158,7 @@ const GetRegistryMessage = packed struct {
 
     pub const Size: usize = @sizeOf(GetRegistryMessage);
 };
-fn get_registry(stream: std.net.Stream, new_id: u32) !void {
-    std.debug.print("id: {d}\n", .{new_id});
+fn get_registry(stream_writer: std.net.Stream.Writer, new_id: u32) !void {
     const msg: GetRegistryMessage = .{
         .header = .{
             .id = wayland.ObjectIDs.display,
@@ -173,8 +168,8 @@ fn get_registry(stream: std.net.Stream, new_id: u32) !void {
         .new_id = new_id,
     };
 
-    const bytes = try posix.write(stream.handle, std.mem.asBytes(&msg));
-    std.debug.print("Sizeof: {d}, .Size: {d}, bytes: {d}\n", .{ @sizeOf(GetRegistryMessage), GetRegistryMessage.Size, bytes });
+    const bytes = try stream_writer.write(std.mem.asBytes(&msg));
+    std.debug.assert(bytes == GetRegistryMessage.Size);
 }
 
 fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
@@ -253,16 +248,15 @@ const RegistryGlobal = struct {
 fn registry_global_handle(ev: Event) !void {
     switch (ev.header.op) {
         0 => {
-            wl_log.warn("wl_registry::global uninmplemented handler", .{});
             const global: RegistryGlobal = try parse_data_response(RegistryGlobal, ev.data);
-            wl_log.info("wl_registry::global ==> name: {d}, interface: {s}, version: {d}", .{
+            wl_log.info("  wl_registry::global ==> name: {d}, interface: {s}, version: {d}\n", .{
                 global.name,
                 global.interface,
                 global.version,
             });
         },
-        1 => wl_log.warn("wl_registry::global_remove uninmplemented handler", .{}),
-        else => wl_log.warn("wl_display :: unrecognized ev opcode: {d}", .{ev.header.op}),
+        1 => wl_log.warn("  wl_registry::global_remove uninmplemented handler", .{}),
+        else => wl_log.warn("  wl_display :: unrecognized ev opcode: {d}", .{ev.header.op}),
     }
 }
 
@@ -271,35 +265,32 @@ pub fn main() !void {
     try stdout.print("Hello, Wayland!\n", .{});
 
     const arena_backer: Allocator = std.heap.page_allocator;
-    var arena = Arena.init(arena_backer);
+    var arena: Arena = .init(arena_backer);
     defer arena.deinit();
     const arena_allocator: Allocator = arena.allocator();
 
     const stream = try connect_display(arena_allocator);
     defer stream.close();
-    // const stream_writer = stream.writer();
+    const stream_writer = stream.writer();
 
-    var res_iter: EventIt = .{
-        .stream = stream,
-    };
+    var res_iter: EventIt = .init(stream);
 
-    // var id: WaylandID = .{};
-    try get_registry(stream, 2);
+    var id: WaylandID = .{};
+    try get_registry(stream_writer, id.next());
 
     while (try res_iter.next()) |ev| {
-        try stdout.print("  :: Header: ID -> {d}, OpCode -> {d}, size -> {d}\n", .{ ev.header.id, ev.header.op, ev.header.size });
+        try stdout.print("  Main :: Header: ID -> {d}, OpCode -> {d}, size -> {d}\n", .{ ev.header.id, ev.header.op, ev.header.size });
         switch (ev.header.id) {
             wayland.ObjectIDs.display => {
                 const err: DisplayError = try .init(ev.data);
-                wl_log.err("  :: Display Msg object id: {d}, errcode: {d}, msg: {s}", .{ err.obj_id, err.code, err.msg });
+                wl_log.err("  Main :: Display Error: object id: {d}, errcode: {d}, msg: {s}", .{ err.obj_id, err.code, err.msg });
             },
             wayland.ObjectIDs.registry => {
-                wl_log.info("  :: Registry handle time ::", .{});
                 try registry_global_handle(ev);
             },
-            else => wl_log.warn("Unknown ID: {d}", .{ev.header.id}),
+            else => wl_log.warn("  Main :: Event Iter :: Urecognized Header ID: {d}", .{ev.header.id}),
         }
     }
 
-    try stdout.print("Exiting now!\n", .{});
+    try stdout.print("Program Exiting Now!\n", .{});
 }
