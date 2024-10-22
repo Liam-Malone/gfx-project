@@ -13,14 +13,14 @@ pub const Registry = struct {
 };
 
 pub const OpCodes = struct {
-    pub const display_get_registry = 1;
-    pub const registry_bind = 0;
-    pub const surface_commit = 0;
-    pub const surface_attach = 1;
+    pub const registry_bind: u16 = 0;
+    pub const display_get_registry: u16 = 1;
+    pub const surface_commit: u16 = 0;
+    pub const surface_attach: u16 = 1;
 };
 pub const ObjectIDs = struct {
-    pub const display = 1;
-    pub const registry = 2;
+    pub const display: u32 = 1;
+    pub const registry: u32 = 2;
 };
 
 pub const wl_registry_bind_opcode: u16 = 0;

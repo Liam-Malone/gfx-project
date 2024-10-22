@@ -31,7 +31,7 @@ const Header = packed struct {
     op: u16,
     size: u16,
 
-    const Size = @sizeOf(Header);
+    const Size: u16 = @sizeOf(Header);
 };
 
 /// Wayland Wire Event
@@ -66,7 +66,7 @@ const EventIt = struct {
 
         pub fn shift(sb: *ShiftBuf) void {
             std.mem.copyForwards(u8, &sb.data, sb.data[sb.start..]);
-            @memset(sb.data[sb.start..], 0); // Just in case
+            @memset(sb.data[sb.start + 1 ..], 0); // Just in case
             sb.end -= sb.start;
             sb.start = 0;
         }
@@ -79,7 +79,7 @@ const EventIt = struct {
     }
 
     pub fn load_events(iter: *EventIt) !void {
-        wl_log.info("Event Iterator :: Loading Events", .{});
+        wl_log.info("  Event Iterator :: Loading Events", .{});
         iter.buf.shift();
         const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]); // This does not hang
         if (bytes_read == 0) {
@@ -93,7 +93,6 @@ const EventIt = struct {
             const buffered_ev = blk: {
                 const header_end = iter.buf.start + Header.Size;
                 if (header_end > iter.buf.end) {
-                    wl_log.warn("  Event Iterator :: Partial header encountered", .{});
                     break :blk null;
                 }
 
@@ -152,13 +151,13 @@ const WaylandID = struct {
     }
 };
 
-const GetRegistryMessage = packed struct {
-    header: Header,
-    new_id: u32,
-
-    pub const Size: usize = @sizeOf(GetRegistryMessage);
-};
 fn get_registry(stream_writer: std.net.Stream.Writer, new_id: u32) !void {
+    const GetRegistryMessage = packed struct {
+        header: Header,
+        new_id: u32,
+
+        pub const Size = @sizeOf(@This());
+    };
     const msg: GetRegistryMessage = .{
         .header = .{
             .id = wayland.ObjectIDs.display,
@@ -172,14 +171,46 @@ fn get_registry(stream_writer: std.net.Stream.Writer, new_id: u32) !void {
     std.debug.assert(bytes == GetRegistryMessage.Size);
 }
 
+fn registry_bind(stream_writer: std.net.Stream.Writer, name: u32, new_id: u32, version: u32) !void {
+    const RegistryBindMsg = packed struct {
+        name: u32,
+        id: u32,
+        version: u32,
+        pub const Size: u16 = @sizeOf(@This());
+    };
+
+    const msg: RegistryBindMsg = .{
+        .name = name,
+        .id = new_id,
+        .version = version,
+    };
+
+    const header: Header = .{
+        .id = wayland.ObjectIDs.registry,
+        .op = wayland.OpCodes.registry_bind,
+        .size = Header.Size + RegistryBindMsg.Size,
+    };
+
+    try stream_writer.writeStruct(header);
+    try stream_writer.writeStruct(msg);
+}
+
+/// Round value up to multiple of secons argument
+/// Would like to find a less costly way to do this that actually works
 fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
-    return if (val == 0) 0 else ((val - 1 / mul + 1) * mul);
+    if (val == 0)
+        return 0
+    else
+        return if (val % mul == 0)
+            val
+        else
+            val + (mul - (val % mul));
 }
 
 const MsgParser = struct {
     buf: []const u8,
 
-    pub fn getU32(mp: *MsgParser) !u32 {
+    pub fn get_u32(mp: *MsgParser) !u32 {
         if (mp.buf.len < 4) {
             return error.InvalidLength;
         }
@@ -188,13 +219,20 @@ const MsgParser = struct {
         mp.consume(4);
         return val;
     }
-    pub fn getString(mp: *MsgParser) ![]const u8 {
+
+    pub fn get_i32(mp: *MsgParser) !i32 {
+        return @intCast(try mp.get_u32());
+    }
+
+    pub fn get_string(mp: *MsgParser) ![]const u8 {
         if (mp.buf.len < 4) {
             return error.InvalidLength;
         }
 
         const msg_len = std.mem.bytesToValue(u32, mp.buf[0..4]);
-        const consume_len = 4 + msg_len;
+        const rounded_len = round_up(msg_len, 4);
+        const consume_len = rounded_len + 4;
+
         if (consume_len > mp.buf.len) {
             return error.InvalidLength;
         }
@@ -203,6 +241,7 @@ const MsgParser = struct {
         mp.consume(consume_len);
         return str;
     }
+
     fn consume(mp: *MsgParser, len: usize) void {
         if (mp.buf.len == len) {
             mp.buf = &.{};
@@ -217,8 +256,11 @@ fn parse_data_response(comptime T: type, data: []const u8) !T {
     var iter: MsgParser = .{ .buf = data };
     inline for (std.meta.fields(T)) |field| {
         @field(ret, field.name) = switch (field.type) {
-            u32 => try iter.getU32(),
-            []const u8 => try iter.getString(),
+            u32 => try iter.get_u32(),
+            []const u8 => blk: {
+                const str = try iter.get_string();
+                break :blk str[0 .. str.len - 1];
+            },
             else => @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type }),
         };
     }
@@ -232,9 +274,9 @@ const DisplayError = struct {
     fn init(data: []const u8) !DisplayError {
         var it: MsgParser = .{ .buf = data };
         return try .{
-            .obj_id = try it.getU32(),
-            .code = try it.getU32(),
-            .msg = try it.getString(),
+            .obj_id = try it.get_u32(),
+            .code = try it.get_u32(),
+            .msg = try it.get_string(),
         };
     }
 };
@@ -244,21 +286,6 @@ const RegistryGlobal = struct {
     interface: []const u8,
     version: u32,
 };
-
-fn registry_global_handle(ev: Event) !void {
-    switch (ev.header.op) {
-        0 => {
-            const global: RegistryGlobal = try parse_data_response(RegistryGlobal, ev.data);
-            wl_log.info("  wl_registry::global ==> name: {d}, interface: {s}, version: {d}\n", .{
-                global.name,
-                global.interface,
-                global.version,
-            });
-        },
-        1 => wl_log.warn("  wl_registry::global_remove uninmplemented handler", .{}),
-        else => wl_log.warn("  wl_display :: unrecognized ev opcode: {d}", .{ev.header.op}),
-    }
-}
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
@@ -278,19 +305,70 @@ pub fn main() !void {
     var id: WaylandID = .{};
     try get_registry(stream_writer, id.next());
 
-    while (try res_iter.next()) |ev| {
-        try stdout.print("  Main :: Header: ID -> {d}, OpCode -> {d}, size -> {d}\n", .{ ev.header.id, ev.header.op, ev.header.size });
-        switch (ev.header.id) {
-            wayland.ObjectIDs.display => {
-                const err: DisplayError = try .init(ev.data);
-                wl_log.err("  Main :: Display Error: object id: {d}, errcode: {d}, msg: {s}", .{ err.obj_id, err.code, err.msg });
-            },
-            wayland.ObjectIDs.registry => {
-                try registry_global_handle(ev);
-            },
-            else => wl_log.warn("  Main :: Event Iter :: Urecognized Header ID: {d}", .{ev.header.id}),
+    var wl_shm_id: u32 = undefined;
+    var wl_seat_id: u32 = undefined;
+    var wl_compositor_id: u32 = undefined;
+    var xdg_wm_base_id: u32 = undefined;
+    // Bind Registry
+    {
+        while (try res_iter.next()) |ev| {
+            switch (ev.header.id) {
+                wayland.ObjectIDs.display => {
+                    const err: DisplayError = try .init(ev.data);
+                    wl_log.err("  Main :: Display Error: object id: {d}, errcode: {d}, msg: {s}", .{ err.obj_id, err.code, err.msg });
+                },
+                wayland.ObjectIDs.registry => {
+                    switch (ev.header.op) {
+                        0 => {
+                            const global: RegistryGlobal = try parse_data_response(RegistryGlobal, ev.data);
+                            wl_log.info("  wl_registry::global ==> name: {d}, interface: {s}, version: {d}", .{
+                                global.name,
+                                global.interface,
+                                global.version,
+                            });
+
+                            if (std.mem.eql(u8, global.interface, "wl_seat")) {
+                                wl_seat_id = id.next();
+                                try registry_bind(stream_writer, global.name, wl_seat_id, 7);
+                                wl_log.info("  wl_registry::global -- bound wl_seat with id: {d}\n", .{wl_seat_id});
+                            } else if (std.mem.eql(u8, global.interface, "wl_compositor")) {
+                                wl_compositor_id = id.next();
+                                try registry_bind(stream_writer, global.name, wl_compositor_id, 5);
+                                wl_log.info("  wl_registry::global -- bound compositor with id: {d}\n", .{wl_compositor_id});
+                            } else if (std.mem.eql(u8, global.interface, "xdg_wm_base")) {
+                                xdg_wm_base_id = id.next();
+                                try registry_bind(stream_writer, global.name, xdg_wm_base_id, 6);
+                                wl_log.info("  wl_registry::global -- bound xdg_wm_base with id: {d}\n", .{xdg_wm_base_id});
+                            } else if (std.mem.eql(u8, global.interface, "wl_shm")) {
+                                wl_shm_id = id.next();
+                                try registry_bind(stream_writer, global.name, wl_shm_id, 1);
+                                wl_log.info("  wl_registry::global -- bound wl_shm with id: {d}\n", .{wl_shm_id});
+                            }
+                        },
+                        1 => wl_log.warn("  wl_registry::global_remove uninmplemented handler", .{}),
+                        else => wl_log.warn("  wl_display :: unrecognized ev opcode: {d}", .{ev.header.op}),
+                    }
+                },
+                else => wl_log.warn("  Main :: Event Iter :: Urecognized Header ID: {d}", .{ev.header.id}),
+            }
         }
     }
 
     try stdout.print("Program Exiting Now!\n", .{});
 }
+
+// Next Steps:
+// - [ ] Create Registry Globals For Following Interfaces:
+//       - [ ] wl_shm
+//       - [ ] wl_compositor
+//       - [ ] xdg_wm_base
+//       - [ ] wl_seat
+// - [ ] Get Compositor Surface
+// - [ ] Get Xdg_Surface
+// - [ ] Get Toplevel of Xdg_Surface
+//       - [ ] Set Toplevel Title
+// - [ ] Commit Compositor Surface
+// - [ ] memmap data over to display
+// - [ ] XML Parser/Generator for Protocols
+//       - [ ] Generate reasonable Structs / Enums / "Methods"
+//       - [ ] Output "description" fields as Doc-Strings
