@@ -20,7 +20,7 @@ fn connect_display(arena: Allocator) !std.net.Stream {
     return stream;
 }
 
-/// Wayland Wire communication
+/// Wayland Wire Communication Header
 ///
 /// 4 Bytes: ID of resource to call methods on
 /// 2 Bytes: method opcode
@@ -31,7 +31,7 @@ const Header = packed struct {
     op: u16,
     size: u16,
 
-    const Size: u16 = @sizeOf(Header);
+    pub const Size: u16 = @sizeOf(Header);
 };
 
 /// Wayland Wire Event
@@ -49,7 +49,7 @@ const EventIt = struct {
     stream: std.net.Stream,
     buf: ShiftBuf = .{},
 
-    /// Need to solve problem of reading a partial header or partial data stream
+    /// This solves the problem of reading a partial header or partial data stream
     /// Buffer -> [ _ _ _ _ _ ]
     /// Fill =>   [ x y z w x ]
     /// Read Event (xyzw)
@@ -64,6 +64,8 @@ const EventIt = struct {
         start: usize = 0,
         end: usize = 0,
 
+        /// Remove already used bytes to allow space for next data read
+        /// Any incomplete data is moved to the front, and all other bytes are zeroed out
         pub fn shift(sb: *ShiftBuf) void {
             std.mem.copyForwards(u8, &sb.data, sb.data[sb.start..]);
             @memset(sb.data[sb.start + 1 ..], 0); // Just in case
@@ -78,7 +80,8 @@ const EventIt = struct {
         };
     }
 
-    pub fn load_events(iter: *EventIt) !void {
+    /// Calls `.shift()` on data buffer, and reads in new bytes from stream
+    fn load_events(iter: *EventIt) !void {
         wl_log.info("  Event Iterator :: Loading Events", .{});
         iter.buf.shift();
         const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]); // This does not hang
@@ -88,6 +91,10 @@ const EventIt = struct {
         iter.buf.end += bytes_read;
     }
 
+    /// Get next message from stored buffer
+    /// When the buffer is filled, the follwing call to `.next()` will overwrite all messages that have already been read
+    ///
+    /// See: `ShiftBuf.shift()`
     pub fn next(iter: *EventIt) !?Event {
         while (true) {
             const buffered_ev = blk: {
@@ -151,6 +158,7 @@ const WaylandID = struct {
     }
 };
 
+/// Request the server to provide us the list of items in the registry
 fn get_registry(stream_writer: std.net.Stream.Writer, new_id: u32) !void {
     const GetRegistryMessage = packed struct {
         header: Header,
@@ -171,14 +179,27 @@ fn get_registry(stream_writer: std.net.Stream.Writer, new_id: u32) !void {
     std.debug.assert(bytes == GetRegistryMessage.Size);
 }
 
-/// Needs to contain
-///  Name from Server: u32
-///  Interface:        string
-///  Version Desired:  u32
-///  ID from Client:   u32
-fn registry_bind(stream_writer: std.net.Stream.Writer, name: u32, interface: [:0]const u8, new_id: u32, version: u32) !void {
-    // const msg_size: u16 = @intCast((3 * @sizeOf(u32)) + interface.len);
-    const msg_size = @sizeOf(u32) * 3 + interface.len + Header.Size;
+/// Bind registry objects with server
+///
+///   Message Contains:
+///    -  Header:           Header
+///    -  Object's name:    u32
+///    -  Interface:        string (contains u32 at start to tell length, and padding to 32-bit alignment after)
+///    -  Desired Version:  u32
+///    -  ID to Bind:       u32
+///
+///   Message Size:
+///    -  Header.Size
+///    -  sizeof(u32) x 3
+///    -  sizeof(padded str + sizeof(u32))
+///
+fn registry_bind(arena: *Arena, writer: std.net.Stream.Writer, global: RegistryGlobal, id: u32) !void {
+    const alloc = arena.allocator();
+    const sentinel_str = try alloc.dupeZ(u8, global.interface);
+    defer alloc.free(sentinel_str);
+
+    const msg_size = Header.Size + 12 + round_up(4 + global.interface.len, 4);
+    var bytes_written: usize = 0;
 
     const header: Header = .{
         .id = wayland.ObjectIDs.registry,
@@ -186,16 +207,52 @@ fn registry_bind(stream_writer: std.net.Stream.Writer, name: u32, interface: [:0
         .size = @intCast(msg_size),
     };
 
-    var bytes_written: usize = 0;
-    bytes_written += try stream_writer.write(std.mem.asBytes(&header));
-    bytes_written += try stream_writer.write(std.mem.asBytes(&name));
-    for (interface) |byte| {
-        try stream_writer.writeByte(byte);
-        bytes_written += 1;
-    }
-    bytes_written += try stream_writer.write(std.mem.asBytes(&version));
-    bytes_written += try stream_writer.write(std.mem.asBytes(&new_id));
+    try writer.writeStruct(header);
+    bytes_written += Header.Size;
+    bytes_written += try writer.write(std.mem.asBytes(&global.name));
+    bytes_written += try write_str(writer, sentinel_str[0 .. sentinel_str.len + 1]);
+    bytes_written += try writer.write(std.mem.asBytes(&global.version));
+    bytes_written += try writer.write(std.mem.asBytes(&id));
+    std.debug.print("Bytes Written: {d}  :: Bytes to write: {d}\n", .{ bytes_written, msg_size });
     std.debug.assert(bytes_written == msg_size);
+}
+
+fn wl_write(writer: std.io.Writer, item: anytype, id: u32, op: u32) !void {
+    var msg_size: usize = Header.Size;
+    inline for (std.meta.fields(@TypeOf(item))) |field| {
+        switch (field.type) {
+            u32, i32 => msg_size += 4,
+            []const u8, [:0]const u8 => msg_size += round_up(@field(item, field.name).len, 4),
+            else => @compileLog("Unsupported field {s} of type {}", .{ field.name, field.type }),
+        }
+    }
+    const header: Header = .{
+        .id = id,
+        .op = op,
+        .size = @intCast(msg_size),
+    };
+
+    try writer.writeStruct(header);
+
+    const endian = builtin.cpu.arch.endian();
+    inline for (std.meta.fields(@TypeOf(item))) |field| {
+        switch (field.type) {
+            .int => try writer.writeInt(@TypeOf(field), @field(item, field.name), endian),
+            .pointer => try writer.write_str(writer, @field(item, field.name)),
+            else => @compileLog("Unsupported field {s} of type {}", .{ field.name, field.type }),
+        }
+    }
+    try writer.writeInt(u32, id, endian);
+}
+
+fn write_str(stream_writer: std.net.Stream.Writer, str: []const u8) !usize {
+    const to_write: u32 = @intCast(round_up(4 + str.len, 4));
+    try stream_writer.writeInt(u32, @intCast(str.len), builtin.cpu.arch.endian());
+    try stream_writer.writeAll(str);
+    const written = 4 + str.len;
+    try stream_writer.writeByteNTimes(0, to_write - written);
+
+    return to_write;
 }
 
 /// Round value up to multiple of secons argument
@@ -245,6 +302,26 @@ const MsgParser = struct {
         return str;
     }
 
+    pub fn get_string_sentinel(mp: *MsgParser) ![:0]const u8 {
+        if (mp.buf.len < 4) {
+            return error.InvalidLength;
+        }
+
+        const msg_len = std.mem.bytesToValue(u32, mp.buf[0..4]);
+        const rounded_len = round_up(msg_len, 4);
+        const consume_len = rounded_len + 4;
+
+        if (consume_len > mp.buf.len) {
+            return error.InvalidLength;
+        }
+
+        var buf = @constCast(mp.buf);
+        buf[4 + msg_len + 1] = 0;
+        const str = mp.buf[4 .. 4 + msg_len :0];
+        mp.consume(consume_len);
+        return str;
+    }
+
     fn consume(mp: *MsgParser, len: usize) void {
         if (mp.buf.len == len) {
             mp.buf = &.{};
@@ -264,11 +341,13 @@ fn parse_data_response(comptime T: type, data: []const u8) !T {
                 const str = try iter.get_string();
                 break :blk str[0 .. str.len - 1];
             },
+            [:0]const u8 => try iter.get_string_sentinel(),
             else => @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type }),
         };
     }
     return ret;
 }
+
 const DisplayError = struct {
     obj_id: u32,
     code: u32,
@@ -288,6 +367,10 @@ const RegistryGlobal = struct {
     name: u32,
     interface: []const u8,
     version: u32,
+
+    pub fn init(data: []const u8) !RegistryGlobal {
+        return try parse_data_response(RegistryGlobal, data);
+    }
 };
 
 pub fn main() !void {
@@ -322,7 +405,7 @@ pub fn main() !void {
             wayland.ObjectIDs.registry => {
                 switch (ev.header.op) {
                     0 => {
-                        const global: RegistryGlobal = try parse_data_response(RegistryGlobal, ev.data);
+                        const global: RegistryGlobal = try .init(ev.data);
                         wl_log.info("  wl_registry::global ==> name: {d}, interface: {s}, version: {d}", .{
                             global.name,
                             global.interface,
@@ -333,78 +416,30 @@ pub fn main() !void {
                             wl_seat_id = id.next();
                             wl_log.info("  wl_registry::global -- binding wl_seat with id: {d}\n", .{wl_seat_id});
 
-                            const msg_len: u32 = @intCast(round_up(global.interface.len + 1, 4)); // Allow for null terminator
-                            const str_end = 4 + global.interface.len;
-                            var bytes: [:0]u8 = @ptrCast(try arena_allocator.alloc(u8, 4 + msg_len));
-
-                            @memcpy(bytes[0..4], std.mem.asBytes(&msg_len)); // Set strlen bytes
-                            @memcpy(bytes[4..str_end], global.interface); // set str bytes
-                            @memset(bytes[str_end..], 0); // set 0-bytes for str end + padding
-
-                            std.debug.print("\n\ninterface str: {s}\n", .{global.interface});
-                            std.debug.print("strlens: interface :: {d} -- copy :: {d}\n", .{ global.interface.len, msg_len });
-                            std.debug.print("str: {s}\n\n", .{bytes[4 .. 4 + global.interface.len + 1]});
-                            registry_bind(stream_writer, global.name, bytes, wl_seat_id, global.version) catch |err| {
+                            registry_bind(&arena, stream_writer, global, wl_seat_id) catch |err| {
                                 wl_log.err("  wl_registry::global -- failed to bind with err: {}\n", .{err});
                             };
-
-                            // registry_bind(stream_writer, global.name, wl_seat_id) catch |err| {
-                            //     wl_log.err("  wl_registry::global -- failed to bind with err: {}\n", .{err});
-                            // };
                         } else if (std.mem.eql(u8, global.interface, "wl_compositor")) {
                             wl_compositor_id = id.next();
                             wl_log.info("  wl_registry::global -- binding compositor with id: {d}\n", .{wl_compositor_id});
 
-                            const msg_len: u32 = @intCast(round_up(global.interface.len + 1, 4)); // Allow for null terminator
-                            const str_end = 4 + global.interface.len;
-                            var bytes: [:0]u8 = @ptrCast(try arena_allocator.alloc(u8, 4 + msg_len));
-
-                            @memcpy(bytes[0..4], std.mem.asBytes(&msg_len)); // Set strlen bytes
-                            @memcpy(bytes[4..str_end], global.interface); // set str bytes
-                            @memset(bytes[str_end..], 0); // set 0-bytes for str end + padding
-
-                            registry_bind(stream_writer, global.name, bytes, wl_compositor_id, global.version) catch |err| {
+                            registry_bind(&arena, stream_writer, global, wl_compositor_id) catch |err| {
                                 wl_log.err("  wl_registry::global -- failed to bind with err: {}\n", .{err});
                             };
-                            // registry_bind(stream_writer, global.name, wl_compositor_id) catch |err| {
-                            //     wl_log.err("  wl_registry::global -- failed to bind with err: {}\n", .{err});
-                            // };
                         } else if (std.mem.eql(u8, global.interface, "xdg_wm_base")) {
                             xdg_wm_base_id = id.next();
                             wl_log.info("  wl_registry::global -- binding xdg_wm_base with id: {d}\n", .{xdg_wm_base_id});
 
-                            const msg_len: u32 = @intCast(round_up(global.interface.len + 1, 4)); // Allow for null terminator
-                            const str_end = 4 + global.interface.len;
-                            var bytes: [:0]u8 = @ptrCast(try arena_allocator.alloc(u8, 4 + msg_len));
-
-                            @memcpy(bytes[0..4], std.mem.asBytes(&msg_len)); // Set strlen bytes
-                            @memcpy(bytes[4..str_end], global.interface); // set str bytes
-                            @memset(bytes[str_end..], 0); // set 0-bytes for str end + padding
-
-                            registry_bind(stream_writer, global.name, bytes, xdg_wm_base_id, global.version) catch |err| {
+                            registry_bind(&arena, stream_writer, global, xdg_wm_base_id) catch |err| {
                                 wl_log.err("  wl_registry::global -- failed to bind with err: {}\n", .{err});
                             };
-                            // registry_bind(stream_writer, global.name, xdg_wm_base_id) catch |err| {
-                            //     wl_log.err("  wl_registry::global -- failed to bind with err: {}\n", .{err});
-                            // };
                         } else if (std.mem.eql(u8, global.interface, "wl_shm")) {
                             wl_shm_id = id.next();
                             wl_log.info("  wl_registry::global -- binding wl_shm with id: {d}\n", .{wl_shm_id});
 
-                            const msg_len: u32 = @intCast(round_up(global.interface.len + 1, 4)); // Allow for null terminator
-                            const str_end = 4 + global.interface.len;
-                            var bytes: [:0]u8 = @ptrCast(try arena_allocator.alloc(u8, 4 + msg_len));
-
-                            @memcpy(bytes[0..4], std.mem.asBytes(&msg_len)); // Set strlen bytes
-                            @memcpy(bytes[4..str_end], global.interface); // set str bytes
-                            @memset(bytes[str_end..], 0); // set 0-bytes for str end + padding
-
-                            registry_bind(stream_writer, global.name, bytes, wl_shm_id, global.version) catch |err| {
+                            registry_bind(&arena, stream_writer, global, wl_shm_id) catch |err| {
                                 wl_log.err("  wl_registry::global -- failed to bind with err: {}\n", .{err});
                             };
-                            // registry_bind(stream_writer, global.name, wl_shm_id) catch |err| {
-                            //     wl_log.err("  wl_registry::global -- failed to bind with err: {}\n", .{err});
-                            // };
                         }
                     },
                     1 => wl_log.warn("  wl_registry::global_remove uninmplemented handler", .{}),
