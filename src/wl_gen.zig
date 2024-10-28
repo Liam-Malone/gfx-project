@@ -36,28 +36,15 @@ const Arg = struct {
         }
         pub fn to_zig_type_string(self: Type) ?[]const u8 {
             return switch (self) {
+                .fd => "void", // fd will be sent through cmsg, not main send
                 .int => "i32",
+                .fixed => "f32",
                 .array => "[]const u8",
                 .string => "[:0]const u8",
-                .fd => "void",
                 .uint, .object, .new_id => "u32",
-                else => null,
             };
         }
     };
-};
-
-const RequestEvent = struct {
-    name: []const u8,
-    description: []const u8,
-    arguments: []Arg,
-};
-
-const Interface = struct {
-    name: []const u8,
-    description: []const u8,
-    events: []RequestEvent,
-    requests: []RequestEvent,
 };
 
 const Generator = struct {
@@ -70,10 +57,11 @@ const Generator = struct {
 // take events too
 //
 
-pub fn walk_print(allocator: Allocator, writer: anytype, root: *xml.Element) !void {
+pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !void {
+    // ------------------------ BEGIN PROTOCOL ------------------------
+    _ = allocator;
     var interface_iter = root.findChildrenByTag("interface");
     while (interface_iter.next()) |interface| {
-        try stdout.print("{s}: name = {s}, version = {s}\n", .{ interface.tag, interface.getAttribute("name").?, interface.getAttribute("version").? });
         const interface_description = interface.findChildByTag("description").?;
         _ = interface_description;
         const interface_name = interface.getAttribute("name").?;
@@ -85,80 +73,136 @@ pub fn walk_print(allocator: Allocator, writer: anytype, root: *xml.Element) !vo
             }
             break :blk 0;
         };
-        var name = try allocator.dupe(u8, interface_name[underscore_idx..]);
-        name[0] = std.ascii.toUpper(name[0]);
-        try stdout.print(
-            \\pub const {s} = struct {{
-            \\    name: []const u8,
-            \\    version: u32 = {s},
-            \\
-        ,
-            .{
-                name,
-                interface_version,
-            },
-        );
+        const name = interface_name[underscore_idx..];
+        if (interface.findChildByTag("description")) |description| {
+            if (description.getAttribute("summary")) |summary| {
+                try writer.print(
+                    \\
+                    \\/// {s}
+                    \\
+                , .{summary});
+            }
+        } else {
+            try writer.writeAll("\n");
+        }
+        // ------------------------ BEGIN INTERFACE ------------------------
         try writer.print(
             \\pub const {s} = struct {{
-            \\    name: []const u8,
+            \\    id: u32,
             \\    version: u32 = {s},
             \\
         ,
             .{
-                name,
+                snakeToPascal(name),
                 interface_version,
             },
         );
-        var req_idx: usize = 0;
+        var idx: usize = 0;
         var request_iter = interface.findChildrenByTag("request");
-        while (request_iter.next()) |req| : (req_idx += 1) {
-            try write_req_params(writer, req, req_idx);
-            try stdout.print(
-                \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params) !void {{
-                \\        log.info("Sending {s}::{s} {{any}}", .{{ params }});
-                \\        wl_msg.write(writer, params, self.id);
-                \\    }}
-                \\
-            , .{
-                req.getAttribute("name").?,
-                name,
-                req.getAttribute("name").?,
-                name,
-                req.getAttribute("name").?,
-            });
+        while (request_iter.next()) |req| : (idx += 1) {
+            const req_name = req.getAttribute("name").?;
+            try write_req_params(writer, req, idx);
+            if (req.findChildByTag("description")) |description| {
+                if (description.getAttribute("summary")) |summary| {
+                    try writer.print(
+                        \\
+                        \\    /// {s}
+                        \\
+                    , .{summary});
+                }
+            } else {
+                try writer.writeAll("\n");
+            }
             try writer.print(
                 \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params) !void {{
-                \\        log.info("Sending {s}::{s} {{any}}", .{{ params }});
-                \\        wl_msg.write(writer, params, self.id);
+                \\        log.debug("Sending {s}::{s} {{any}}", .{{ params }});
+                \\        try wl_msg.write(writer, params, self.id);
                 \\    }}
                 \\
             , .{
-                req.getAttribute("name").?,
-                name,
-                req.getAttribute("name").?,
-                name,
-                req.getAttribute("name").?,
+                req_name,
+                snakeToPascal(name),
+                req_name,
+                snakeToPascal(name),
+                req_name,
             });
         }
-        try stdout.print("}};\n\x00", .{});
-        try writer.print("}};\n\x00", .{});
+
+        idx = 0;
+        if (interface.findChildByTag("event")) |_| {
+            var event_iter = interface.findChildrenByTag("event");
+            try writer.print("pub const Event = union (enum) {{\n", .{});
+            // Declare fields
+            while (event_iter.next()) |ev| {
+                const base_name = ev.getAttribute("name").?;
+                const ev_name = if (std.mem.eql(u8, base_name, "error")) "err" else base_name;
+
+                // `Event.` prefix added for disambiguation
+                try writer.print(
+                    \\    {s}: Event.{s},
+                    \\
+                , .{ ev_name, snakeToPascal(base_name) });
+            }
+
+            // Declare Types
+            event_iter = interface.findChildrenByTag("event"); // reset
+            while (event_iter.next()) |ev| {
+                const ev_name = ev.getAttribute("name").?;
+
+                try writer.print(
+                    \\
+                    \\        pub const {s} = struct {{
+                , .{snakeToPascal(ev_name)});
+
+                var ev_arg_iter = ev.findChildrenByTag("arg");
+                while (ev_arg_iter.next()) |ev_arg| {
+                    const arg_name = ev_arg.getAttribute("name").?;
+                    try writer.print("\n             {s}", .{arg_name});
+                    const arg_t_opt = ev_arg.getAttribute("type");
+                    if (arg_t_opt) |arg_t|
+                        try writer.print(": {s},", .{(try Arg.Type.from_string(arg_t)).to_zig_type_string().?})
+                    else
+                        try writer.print(",", .{});
+                }
+                try writer.print("        }};", .{});
+            }
+            // TODO: Parse function generation
+            event_iter = interface.findChildrenByTag("event"); // reset
+            try writer.print(
+                \\        pub fn parse(op: u32, data: []const u8) !Event {{
+                \\            return switch (op) {{
+                \\
+            , .{});
+            while (event_iter.next()) |ev| : (idx += 1) {
+                const base_name = ev.getAttribute("name").?;
+                const ev_name = if (std.mem.eql(u8, base_name, "error")) "err" else base_name;
+                try writer.print(
+                    \\                {d} => .{{ .{s} = try wl_msg.parse_data(Event.{s}, data) }},
+                    \\
+                , .{ idx, ev_name, snakeToPascal(base_name) });
+            }
+            try writer.print(
+                \\                else => {{
+                \\                    log.warn("Unknown {s} event: {{d}}", .{{op}});
+                \\                    return error.UnknownEvent;
+                \\                }},
+                \\
+            , .{name});
+            try writer.print("\n            }};\n", .{});
+            try writer.print("\n        }}\n", .{});
+            try writer.print("    }};\n", .{});
+        }
+        idx = 0;
+
+        // ------------------------  END INTERFACE  ------------------------
+        try writer.print("}};\n", .{});
     }
+    // ------------------------  END PROTOCOL  ------------------------
 }
 
 fn write_req_params(writer: anytype, req: *xml.Element, idx: usize) !void {
-    // try stdout.print("    >> {s}: name = {s}\n", .{ req.tag, req.getAttribute("name").? });
-
-    try stdout.print(
-        \\    pub const {s}_params = struct {{
-        \\        pub const op = {d};
-        \\
-    ,
-        .{
-            req.getAttribute("name").?,
-            idx,
-        },
-    );
     try writer.print(
+        \\
         \\    pub const {s}_params = struct {{
         \\        pub const op = {d};
         \\
@@ -170,21 +214,25 @@ fn write_req_params(writer: anytype, req: *xml.Element, idx: usize) !void {
     );
     var arg_iter = req.findChildrenByTag("arg");
     while (arg_iter.next()) |arg| {
-        const arg_name = arg.getAttribute("name").?;
-        const arg_type = arg.getAttribute("type").?;
         const arg_interface_opt = arg.getAttribute("interface");
+        const arg_name = arg.getAttribute("name").?;
+        const arg_type: Arg.Type = try Arg.Type.from_string(arg.getAttribute("type").?);
 
-        if (arg_interface_opt) |arg_interface| {
-            std.log.warn("unsure how to handle interfaces in args as of now :: interface: {s}", .{arg_interface});
+        if (arg.getAttribute("summary")) |summary| {
+            try writer.print(
+                \\        /// {s}
+                \\
+            , .{summary});
         }
-
-        try stdout.print("        {s}: {s},\n", .{ arg_name, (try Arg.Type.from_string(arg_type)).to_zig_type_string().? });
-        try writer.print("        {s}: {s},\n", .{ arg_name, (try Arg.Type.from_string(arg_type)).to_zig_type_string().? });
+        if (arg_type == .new_id and arg_interface_opt == null) {
+            try writer.print(
+                \\        {s}_interface: [:0]const u8,
+                \\        {s}_interface_version: u32,
+                \\
+            , .{ arg_name, arg_name });
+        }
+        try writer.print("        {s}: {s},\n", .{ arg_name, arg_type.to_zig_type_string().? });
     }
-    try stdout.print(
-        \\    }};
-        \\
-    , .{});
     try writer.print(
         \\    }};
         \\
@@ -194,48 +242,37 @@ fn write_req_params(writer: anytype, req: *xml.Element, idx: usize) !void {
 pub fn generate(allocator: Allocator, xml_filename: []const u8, spec_xml: []const u8, writer: anytype) !void {
     const spec = try xml.parse(allocator, spec_xml);
     defer spec.deinit();
-    try stdout.print("{s}\n", .{xml_filename});
-    const start_idx = blk: {
-        var idx: usize = xml_filename.len - 1;
-        while (idx < 0) {
-            if (xml_filename[idx] == '/') {
-                idx += 1;
-                break :blk idx;
-            }
-            idx -= 1;
-        }
-        break :blk idx;
-    };
-    const end_idx = blk: {
-        var idx: usize = xml_filename.len - 1;
-        while (idx < 0) {
-            if (xml_filename[idx] == '.' or xml_filename[idx] == '.') {
-                idx += 1;
-                break :blk idx;
-            }
-            idx -= 1;
-        }
-        break :blk idx;
-    };
 
-    try stdout.print("root:\n{s} = {s}\nattrib count: {d}\n\n", .{ spec.root.attributes[0].name, spec.root.attributes[0].value, spec.root.attributes.len });
-    try stdout.print(
-        \\// THIS FILE IS AUTO-GENERATED BY Zig-Wayland-Generator
-        \\// If there are any issues... uhh well, there's nowhere to report yet, this isn't a released tool/program, I'm the only user unless someone else has copied the code out of my repo...
-        \\const std = @import("std");
-        \\const wl_msg = @import("wl_msg");
-        \\const log = std.log.scoped(.{s});
-        \\
-    , .{xml_filename[start_idx..end_idx]});
+    var start_idx: usize = 0;
+    var end_idx: usize = xml_filename.len - 1;
+
+    for (xml_filename, 0..) |char, idx| {
+        if (char == '/') start_idx = idx + 1;
+        if (char == '.') end_idx = idx;
+    }
+    var scope_name: []u8 = try allocator.dupe(u8, xml_filename[start_idx..end_idx]);
+    for (scope_name, 0..) |char, idx| {
+        if (char == '-') {
+            scope_name[idx] = '_';
+        }
+    }
+
     try writer.print(
         \\// THIS FILE IS AUTO-GENERATED BY Zig-Wayland-Generator
-        \\// If there are any issues... uhh well, there's nowhere to report yet, this isn't a released tool/program, I'm the only user unless someone else has copied the code out of my repo...
+        \\//
+        \\// If there are any issues... uhh well, there's nowhere to report yet, 
+        \\// this isn't a released tool/program, I'm the only user unless someone
+        \\// else has copied the code out of my repo...
+        \\//
+        \\// TODO: Put a useful message in here when this thing is ready.
+        \\
         \\const std = @import("std");
-        \\const wl_msg = @import("wl_msg");
         \\const log = std.log.scoped(.{s});
         \\
-    , .{xml_filename[start_idx..end_idx]});
-    try walk_print(allocator, writer, spec.root);
+        \\const wl_msg = @import("wl_msg"); // It's assumed that the user provides this module
+        \\
+    , .{scope_name});
+    try gen_protocol(allocator, writer, spec.root);
 
     // defer spec.deinit();
     // var gen: Generator = .init(allocator, spec.root) catch |err| {
@@ -246,6 +283,7 @@ pub fn generate(allocator: Allocator, xml_filename: []const u8, spec_xml: []cons
     //     std.log.err("Failed to render with err: {s}", .{@errorName(err)});
     // };
 }
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -267,6 +305,7 @@ pub fn main() !void {
             };
             std.process.exit(1);
         } else if (std.mem.eql(u8, arg, "--debug")) {
+            try stdout.print("[debug mode]\n", .{});
             debug = true;
         } else if (xml_opt == null) {
             xml_opt = arg;
@@ -323,6 +362,10 @@ pub fn main() !void {
         error.OutOfMemory => @panic("oom"),
     };
 
+    if (tree.errors.len > 0 and debug) {
+        try stdout.writeAll(src);
+    }
+
     if (std.fs.path.dirname(out_file)) |dir| {
         cwd.makePath(dir) catch |err| {
             std.log.err("failed to create output directory '{s}' ({s})", .{ dir, @errorName(err) });
@@ -363,3 +406,36 @@ fn reportParseErrors(tree: std.zig.Ast) !void {
         try stderr.writeAll("^\n");
     }
 }
+
+// Taken from Sphaerophoria -- https://github.com/sphaerophoria/sphwayland-client
+//-------------------------------------------------------------------------------
+const SnakeToPascal = struct {
+    name: []const u8,
+
+    pub fn format(
+        self: *const SnakeToPascal,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        var it = std.mem.splitScalar(u8, self.name, '_');
+        while (it.next()) |elem| {
+            try printWithUpperFirstChar(writer, elem);
+        }
+    }
+};
+fn printWithUpperFirstChar(writer: anytype, s: []const u8) !void {
+    switch (s.len) {
+        0 => return,
+        1 => try writer.writeByte(std.ascii.toUpper(s[0])),
+        else => {
+            const first_char = std.ascii.toUpper(s[0]);
+            try writer.print("{c}{s}", .{ first_char, s[1..] });
+        },
+    }
+}
+
+fn snakeToPascal(s: []const u8) SnakeToPascal {
+    return .{ .name = s };
+}
+//-------------------------------------------------------------------------------
