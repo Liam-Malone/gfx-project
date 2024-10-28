@@ -163,6 +163,7 @@ pub fn write_ctrl_msg(writer: anytype, msg: []const u8, fd: std.posix.fd_t) !voi
         .flags = 0,
     };
 
+    // TODO: check for write amount of bytes
     _ = try std.posix.sendmsg(writer.context.handle, &sock_msg, 0);
 }
 

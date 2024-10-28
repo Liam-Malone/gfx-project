@@ -48,6 +48,10 @@ pub fn main() !void {
         var wl_seat_opt: ?wl.Seat = null;
         var compositor_opt: ?wl.Compositor = null;
         var xdg_wm_base_opt: ?xdg.WmBase = null;
+        var wl_surface_opt: ?wl.Surface = null;
+        var xdg_surface_opt: ?xdg.Surface = null;
+        var xdg_toplevel_opt: ?xdg.Toplevel = null;
+
         var wl_event_it: EventIt(4096) = .init(socket);
         wl_event_it.load_events() catch |err| {
             std.log.err("Failed to load events from socket :: {s}", .{@errorName(err)});
@@ -95,7 +99,10 @@ pub fn main() !void {
                                     nil_opt,
                                     wl_seat,
                                     wl_compositor,
+                                    wl_surface,
                                     xdg_wm_base,
+                                    xdg_surface,
+                                    xdg_toplevel,
                                 };
                                 const interface_name = std.meta.stringToEnum(desired_interfaces, global.interface) orelse blk: {
                                     std.log.debug("Unused interface: {s}", .{global.interface});
@@ -111,10 +118,13 @@ pub fn main() !void {
                                         std.log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
+                                    .wl_surface => wl_surface_opt = try interface_registry.bind(wl.Surface, sock_writer, global),
                                     .xdg_wm_base => xdg_wm_base_opt = interface_registry.bind(xdg.WmBase, sock_writer, global) catch |err| nil: {
                                         std.log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
+                                    .xdg_surface => xdg_surface_opt = try interface_registry.bind(xdg.Surface, sock_writer, global),
+                                    .xdg_toplevel => xdg_toplevel_opt = try interface_registry.bind(xdg.Toplevel, sock_writer, global),
                                 }
                             },
                             .global_remove => {
@@ -139,10 +149,20 @@ pub fn main() !void {
             break :exit error.NoXdgWmBase;
         };
 
+        // TODO: Add err handling
+        const wl_seat = wl_seat_opt orelse break :exit error.NoWaylandSeat;
+        const xdg_surface = xdg_surface_opt orelse break :exit error.NoXdgSurface;
+        const xdg_toplevel = xdg_toplevel_opt orelse break :exit error.NoXdgToplevel;
+
+        wl.ShmPool.create_buffer_params;
         _ = compositor;
         _ = xdg_wm_base;
+        _ = wl_seat; // autofix
+        _ = xdg_surface; // autofix
+        _ = xdg_toplevel; // autofix
         // TODO: Establish display
 
+        // main loop
         while (true) {
             const ev = wl_event_it.next() catch |err| blk: {
                 switch (err) {
