@@ -10,18 +10,31 @@ pub const Registry = struct {
         bind = 1,
     };
     pub const EventGlobal: u16 = 0;
+    pub const GlobalRemove: u16 = 1;
 };
 
 pub const OpCodes = struct {
     pub const registry_bind: u16 = 0;
-    pub const display_get_registry: u16 = 1;
     pub const surface_commit: u16 = 0;
+    pub const shm_create_pool: u16 = 0;
+    pub const shm_pool_create_buffer: u16 = 0;
+
     pub const surface_attach: u16 = 1;
+    pub const display_get_registry: u16 = 1;
+    pub const compositor_create_surface: u16 = 1;
+
+    pub const xdg_surface_get_toplevel: u16 = 1;
+    pub const xdg_wm_base_get_xdg_surface: u16 = 2;
+    pub const xdg_wm_base_pong: u16 = 3;
+    pub const xdg_surface_ack_configure: u16 = 4;
 };
+
 pub const ObjectIDs = struct {
     pub const display: u32 = 1;
     pub const registry: u32 = 2;
 };
+
+// constants taken from: https://gaultier.github.io/blog/wayland_from_scratch.html
 
 pub const wl_registry_bind_opcode: u16 = 0;
 pub const wl_surface_commit_opcode: u16 = 6;
