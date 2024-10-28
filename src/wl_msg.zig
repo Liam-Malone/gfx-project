@@ -140,35 +140,30 @@ fn write_str(writer: anytype, str: [:0]const u8) !void {
 
 /// Function for using Control Messages to send File Descriptors
 /// TODO: make it work
-pub fn write_ctrl_msg(writer: anytype, fd: std.posix.fd_t) !void {
+pub fn write_ctrl_msg(writer: anytype, msg: []const u8, fd: std.posix.fd_t) !void {
     const control_msg: cmsg(std.posix.fd_t) = .{
         .level = std.posix.SOL.SOCKET,
         .type = 0x01, // SCM_RIGHTS
         .data = fd,
     };
 
+    const iov = [1]std.posix.iovec_const{.{
+        .base = msg.ptr,
+        .len = msg.len,
+    }};
+
     const cmsg_bytes = std.mem.asBytes(&control_msg);
     const sock_msg: std.posix.msghdr_const = .{
         .name = null,
         .namelen = 0,
-        .iov = &{},
-        .iovlen = 0,
+        .iov = iov,
+        .iovlen = 1,
         .control = cmsg_bytes.ptr,
         .controllen = cmsg_bytes.len,
         .flags = 0,
     };
 
     _ = try std.posix.sendmsg(writer.context.handle, &sock_msg, 0);
-}
-
-fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
-    if (val == 0)
-        return 0
-    else
-        return if (val % mul == 0)
-            val
-        else
-            val + (mul - (val % mul));
 }
 
 pub fn cmsg(comptime T: type) type {
@@ -180,4 +175,14 @@ pub fn cmsg(comptime T: type) type {
         data: T,
         _padding: std.meta.Int(.unsigned, 8 * padding_size) = 0,
     };
+}
+
+fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
+    if (val == 0)
+        return 0
+    else
+        return if (val % mul == 0)
+            val
+        else
+            val + (mul - (val % mul));
 }

@@ -115,7 +115,7 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
             }
             try writer.print(
                 \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params) !void {{
-                \\        log.debug("Sending {s}::{s} {{any}}", .{{ params }});
+                \\        log.debug("    Sending {s}::{s} {{any}}", .{{ params }});
                 \\        try wl_msg.write(writer, params, self.id);
                 \\    }}
                 \\
