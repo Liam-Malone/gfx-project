@@ -46,11 +46,9 @@ pub fn main() !void {
 
         // bind interfaces
         var wl_seat_opt: ?wl.Seat = null;
+        var wl_shm_opt: ?wl.Shm = null;
         var compositor_opt: ?wl.Compositor = null;
         var xdg_wm_base_opt: ?xdg.WmBase = null;
-        var wl_surface_opt: ?wl.Surface = null;
-        var xdg_surface_opt: ?xdg.Surface = null;
-        var xdg_toplevel_opt: ?xdg.Toplevel = null;
 
         var wl_event_it: EventIt(4096) = .init(socket);
         wl_event_it.load_events() catch |err| {
@@ -98,11 +96,9 @@ pub fn main() !void {
                                 const desired_interfaces = enum {
                                     nil_opt,
                                     wl_seat,
+                                    wl_shm,
                                     wl_compositor,
-                                    wl_surface,
                                     xdg_wm_base,
-                                    xdg_surface,
-                                    xdg_toplevel,
                                 };
                                 const interface_name = std.meta.stringToEnum(desired_interfaces, global.interface) orelse blk: {
                                     std.log.debug("Unused interface: {s}", .{global.interface});
@@ -114,17 +110,15 @@ pub fn main() !void {
                                         std.log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
+                                    .wl_shm => wl_shm_opt = try interface_registry.bind(wl.Shm, sock_writer, global),
                                     .wl_compositor => compositor_opt = interface_registry.bind(wl.Compositor, sock_writer, global) catch |err| nil: {
                                         std.log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
-                                    .wl_surface => wl_surface_opt = try interface_registry.bind(wl.Surface, sock_writer, global),
                                     .xdg_wm_base => xdg_wm_base_opt = interface_registry.bind(xdg.WmBase, sock_writer, global) catch |err| nil: {
                                         std.log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
-                                    .xdg_surface => xdg_surface_opt = try interface_registry.bind(xdg.Surface, sock_writer, global),
-                                    .xdg_toplevel => xdg_toplevel_opt = try interface_registry.bind(xdg.Toplevel, sock_writer, global),
                                 }
                             },
                             .global_remove => {
@@ -140,55 +134,212 @@ pub fn main() !void {
             }
         }
 
-        const compositor = compositor_opt orelse {
+        const compositor: wl.Compositor = compositor_opt orelse {
             wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(error.NoWaylandCompositor)});
             break :exit error.NoWaylandCompositor;
         };
-        const xdg_wm_base = xdg_wm_base_opt orelse {
+        const xdg_wm_base: xdg.WmBase = xdg_wm_base_opt orelse {
             wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(error.NoXdgWmBase)});
             break :exit error.NoXdgWmBase;
         };
 
         // TODO: Add err handling
-        const wl_seat = wl_seat_opt orelse break :exit error.NoWaylandSeat;
-        const xdg_surface = xdg_surface_opt orelse break :exit error.NoXdgSurface;
-        const xdg_toplevel = xdg_toplevel_opt orelse break :exit error.NoXdgToplevel;
+        const wl_seat: wl.Seat = wl_seat_opt orelse break :exit error.NoWaylandSeat;
+        const wl_shm: wl.Shm = wl_shm_opt orelse break :exit error.NoShm;
 
-        wl.ShmPool.create_buffer_params;
-        _ = compositor;
-        _ = xdg_wm_base;
-        _ = wl_seat; // autofix
-        _ = xdg_surface; // autofix
-        _ = xdg_toplevel; // autofix
-        // TODO: Establish display
+        const wl_surface: wl.Surface = try interface_registry.register(wl.Surface);
+        try compositor.create_surface(sock_writer, .{ .id = wl_surface.id });
 
-        // main loop
-        while (true) {
-            const ev = wl_event_it.next() catch |err| blk: {
-                switch (err) {
-                    error.RemoteClosed, error.BrokenPipe, error.StreamClosed => {
-                        std.log.err("encountered err: {any}", .{err});
-                        break :exit err;
-                    },
-                    else => {
-                        std.log.err("encountered err: {any}", .{err});
-                    },
+        const xdg_surface = try interface_registry.register(xdg.Surface);
+        try xdg_wm_base.get_xdg_surface(sock_writer, .{
+            .id = xdg_surface.id,
+            .surface = wl_surface.id,
+        });
+        const xdg_toplevel = try interface_registry.register(xdg.Toplevel);
+        try xdg_surface.get_toplevel(sock_writer, .{ .id = xdg_toplevel.id });
+        std.debug.print("XDG Toplevel id: {d}\n", .{xdg_toplevel.id});
+
+        try wl_surface.commit(sock_writer, .{});
+
+        const shm_buf_width = 960;
+        const shm_buf_height = 540;
+        const shm_buf_stride = shm_buf_width * 4;
+        const shm_buf_size = shm_buf_stride * shm_buf_height;
+        const shm_fd = try std.posix.memfd_create("Zig-Wire Wayland", 0);
+        try std.posix.ftruncate(shm_fd, shm_buf_size);
+
+        const data = try std.posix.mmap(
+            null,
+            shm_buf_size,
+            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            .{ .TYPE = .SHARED },
+            shm_fd,
+            0,
+        );
+        // hack until @ptrCast + slice len change is implemented
+        {
+            const data_u32: [*]u32 = @ptrCast(data);
+
+            for (0..shm_buf_height) |y| {
+                for (0..shm_buf_width) |x| {
+                    if ((x + y / 8 * 8) % 16 < 8) {
+                        data_u32[y * shm_buf_width + x] = 0xFF666666;
+                    } else {
+                        data_u32[y * shm_buf_width + x] = 0xFFEEEEEE;
+                    }
                 }
-                break :blk Event.nil;
-            } orelse Event.nil;
-            const interface = interface_registry.get(ev.header.id) orelse .nil_ev;
-            switch (interface) {
-                .nil_ev => {
-                    // nil event handle
-                },
-                else => {
-                    // other event handling
-                },
             }
         }
+        // create shm pool
+        // delay these until after ACK-ing configurations
+        const shm_pool: wl.ShmPool = try interface_registry.register(wl.ShmPool);
+        const wl_buffer: wl.Buffer = try interface_registry.register(wl.Buffer);
+
+        var state: State = .{
+            .display = display,
+            .registry = registry,
+            .compositor = compositor,
+            .interface_registry = interface_registry,
+            .seat = wl_seat,
+            .shm = wl_shm,
+            .xdg_wm_base = xdg_wm_base,
+
+            .sock_writer = sock_writer,
+            .shm_pool = shm_pool,
+            .wl_buffer = wl_buffer,
+            .wl_surface = wl_surface,
+            .xdg_surface = xdg_surface,
+            .xdg_toplevel = xdg_toplevel,
+            .config_acked = false,
+            .running = true,
+        };
+
+        var attached = false;
+        var unmapped = false;
+
+        const ev_thread = std.Thread.spawn(.{}, handle_wl_events, .{ &state, &wl_event_it }) catch |err| {
+            std.log.err("Event thread died with err: {s}", .{@errorName(err)});
+
+            break :exit err;
+        };
+
+        // main loop
+        while (state.running) {
+            if (state.config_acked and !attached) {
+                attached = true;
+                std.debug.print("looping again\n", .{});
+
+                try wl_shm.create_pool(sock_writer, .{ .id = shm_pool.id, .fd = shm_fd, .size = shm_buf_size });
+                try shm_pool.create_buffer(sock_writer, .{
+                    .id = wl_buffer.id,
+                    .offset = 0,
+                    .width = shm_buf_width,
+                    .height = shm_buf_height,
+                    .stride = shm_buf_stride,
+                    .format = 1, // TODO :: Add enum generation to bindgen
+                });
+
+                if (!unmapped) {
+                    std.posix.munmap(data);
+                    unmapped = true;
+                }
+
+                try wl_surface.attach(sock_writer, .{
+                    .buffer = wl_buffer.id,
+                    .x = 0,
+                    .y = 0,
+                });
+                try wl_surface.commit(sock_writer, .{});
+            }
+        }
+        ev_thread.join();
     };
 
     return return_val;
+}
+
+const State = struct {
+    display: wl.Display,
+    registry: wl.Registry,
+    compositor: wl.Compositor,
+    interface_registry: InterfaceRegistry,
+    seat: wl.Seat,
+    shm: wl.Shm,
+    xdg_wm_base: xdg.WmBase,
+
+    sock_writer: std.net.Stream.Writer,
+    shm_pool: wl.ShmPool,
+    wl_buffer: wl.Buffer,
+    wl_surface: wl.Surface,
+    xdg_surface: xdg.Surface,
+    xdg_toplevel: xdg.Toplevel,
+    config_acked: bool,
+    running: bool,
+};
+
+fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
+    while (true) {
+        const ev = event_iterator.next() catch |err| blk: {
+            switch (err) {
+                error.RemoteClosed, error.BrokenPipe, error.StreamClosed => {
+                    std.log.err("encountered err: {any}", .{err});
+                    return err;
+                },
+                else => {
+                    std.log.err("encountered err: {any}", .{err});
+                },
+            }
+            break :blk Event.nil;
+        } orelse Event.nil;
+        const interface = state.interface_registry.get(ev.header.id) orelse .nil_ev;
+        switch (interface) {
+            .nil_ev => {
+                // nil event handle
+            },
+            .xdg_wm_base => {
+                const action_opt: ?xdg.WmBase.Event = xdg.WmBase.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .ping => |ping| {
+                            try state.xdg_wm_base.pong(state.sock_writer, .{
+                                .serial = ping.serial,
+                            });
+                        },
+                    };
+            },
+            .xdg_surface => {
+                const action_opt: ?xdg.Surface.Event = xdg.Surface.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .configure => |configure| {
+                            try state.xdg_surface.ack_configure(state.sock_writer, .{ .serial = configure.serial });
+                            state.config_acked = true;
+                        },
+                    };
+            },
+            .xdg_toplevel => {
+                const action_opt: ?xdg.Toplevel.Event = xdg.Toplevel.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .configure => |configure| {
+                            _ = configure; // compositor can't tell me what to do!!!
+                        },
+                        .close => { //  Empty struct, nothing to capture
+                            std.log.warn("toplevel close handling not yet implemented", .{});
+                            std.log.info("server is closing this toplevel", .{});
+                            state.running = false;
+                            break;
+                        },
+                        else => {
+                            try log_unused_event(interface, ev);
+                        },
+                    };
+            },
+            else => {
+                try log_unused_event(interface, ev);
+            },
+        }
+    }
 }
 
 /// Connect To Wayland Display
@@ -218,6 +369,8 @@ const InterfaceType = enum {
     registry,
     compositor,
     wl_seat,
+    wl_shm,
+    wl_shm_pool,
     wl_surface,
     wl_buffer,
     wl_callback,
@@ -228,6 +381,8 @@ const InterfaceType = enum {
     pub fn from_type(comptime T: type) !InterfaceType {
         return switch (T) {
             wl.Seat => .wl_seat,
+            wl.Shm => .wl_shm,
+            wl.ShmPool => .wl_shm_pool,
             wl.Display => .display,
             wl.Registry => .registry,
             wl.Compositor => .compositor,
@@ -318,6 +473,12 @@ fn log_unused_event(interface: InterfaceType, event: Event) !void {
         },
         .wl_seat => {
             std.log.debug("Unused event: {any}", .{try wl.Seat.Event.parse(event.header.op, event.data)});
+        },
+        .wl_shm => {
+            std.log.debug("Unused event: {any}", .{try wl.Shm.Event.parse(event.header.op, event.data)});
+        },
+        .wl_shm_pool => {
+            // doesn't exist
         },
         .wl_surface => {
             std.log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(event.header.op, event.data)});

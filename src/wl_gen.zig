@@ -36,7 +36,7 @@ const Arg = struct {
         }
         pub fn to_zig_type_string(self: Type) ?[]const u8 {
             return switch (self) {
-                .fd => "void", // fd will be sent through cmsg, not main send
+                .fd => "wl_msg.FileDescriptor", // fd will be sent through cmsg, not main send
                 .int => "i32",
                 .fixed => "f32",
                 .array => "[]const u8",
@@ -116,7 +116,7 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
             try writer.print(
                 \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params) !void {{
                 \\        log.debug("    Sending {s}::{s} {{any}}", .{{ params }});
-                \\        try wl_msg.write(writer, params, self.id);
+                \\        try wl_msg.write(writer, @TypeOf(params), params, self.id);
                 \\    }}
                 \\
             , .{

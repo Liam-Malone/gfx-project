@@ -19,6 +19,8 @@ pub const Header = packed struct(u64) {
     pub const Size: u16 = @sizeOf(@This());
 };
 
+pub const FileDescriptor = std.posix.fd_t;
+
 const EventParser = struct {
     buf: []const u8,
 
@@ -77,7 +79,6 @@ pub fn parse_data(comptime T: type, data: []const u8) !T {
             i32 => try ev_iter.get_i32(),
             [:0]const u8 => try ev_iter.get_string(),
             []const u8 => try ev_iter.get_arr(),
-            void => {},
             else => {
                 @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type });
             },
@@ -86,15 +87,15 @@ pub fn parse_data(comptime T: type, data: []const u8) !T {
     return event_result;
 }
 
-pub fn write(writer: anytype, item: anytype, id: u32) !void {
+pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
     var msg_size: usize = Header.Size;
     inline for (std.meta.fields(@TypeOf(item))) |field| {
         switch (field.type) {
-            u32 => msg_size += u32_size,
-            i32 => msg_size += u32_size,
+            i32, u32 => {
+                if (!std.mem.eql(u8, field.name, "fd")) msg_size += u32_size;
+            },
             [:0]const u8 => msg_size += str_write_len(@field(item, field.name)),
             []const u8 => msg_size += arr_write_len(@field(item, field.name)),
-            void => {},
             else => @compileLog("Unsupported field {s} of type {}", .{ field.name, field.type }),
         }
     }
@@ -103,8 +104,29 @@ pub fn write(writer: anytype, item: anytype, id: u32) !void {
         .op = @TypeOf(item).op,
         .msg_size = @intCast(msg_size),
     };
-
     try writer.writeStruct(header);
+
+    if (@hasField(T, "fd")) {
+        const msg_len = @sizeOf(T) - @sizeOf(FileDescriptor);
+        std.log.debug("msg_len: {d}", .{msg_len});
+        var msg: [msg_len]u8 = undefined;
+        var idx: usize = 0;
+        var fd: FileDescriptor = undefined;
+        inline for (std.meta.fields(@TypeOf(item))) |field| {
+            const val = @field(item, field.name);
+            if (std.mem.eql(u8, field.name, "fd")) {
+                fd = @intCast(val);
+            } else {
+                const field_as_bytes = std.mem.asBytes(&val);
+                std.log.debug("length of {s} :: {d}", .{ field.name, field_as_bytes.len });
+                @memcpy(msg[idx .. idx + field_as_bytes.len], field_as_bytes);
+                idx += field_as_bytes.len;
+            }
+        }
+
+        try write_control_msg(writer, &msg, fd);
+        return;
+    }
 
     inline for (std.meta.fields(@TypeOf(item))) |field| {
         switch (field.type) {
@@ -112,7 +134,7 @@ pub fn write(writer: anytype, item: anytype, id: u32) !void {
             i32 => try writer.writeInt(i32, @field(item, field.name), endian),
             [:0]const u8 => try write_str(writer, @field(item, field.name)),
             []const u8 => try write_arr(writer, @field(item, field.name)),
-            void => {},
+            void => {}, // skip -- should be cmsg
             else => @compileLog("Unsupported field {s} of type {}", .{ field.name, field.type }),
         }
     }
@@ -138,44 +160,72 @@ fn write_str(writer: anytype, str: [:0]const u8) !void {
     try write_arr(writer, @ptrCast(str[0 .. str.len + 1]));
 }
 
-/// Function for using Control Messages to send File Descriptors
-/// TODO: make it work
-pub fn write_ctrl_msg(writer: anytype, msg: []const u8, fd: std.posix.fd_t) !void {
-    const control_msg: cmsg(std.posix.fd_t) = .{
+pub fn write_control_msg(writer: anytype, msg_bytes: []const u8, fd: FileDescriptor) !void {
+    const control_msg: cmsg(@TypeOf(fd)) = .{
         .level = std.posix.SOL.SOCKET,
-        .type = 0x01, // SCM_RIGHTS
+        .type = 0x01, // value of SCM_RIGHTS
         .data = fd,
     };
 
-    const iov = [1]std.posix.iovec_const{.{
-        .base = msg.ptr,
-        .len = msg.len,
-    }};
+    const iov = [_]std.posix.iovec_const{
+        .{
+            .base = msg_bytes.ptr,
+            .len = msg_bytes.len,
+        },
+    };
 
     const cmsg_bytes = std.mem.asBytes(&control_msg);
     const sock_msg: std.posix.msghdr_const = .{
         .name = null,
         .namelen = 0,
-        .iov = iov,
-        .iovlen = 1,
+        .iov = &iov,
+        .iovlen = iov.len,
         .control = cmsg_bytes.ptr,
         .controllen = cmsg_bytes.len,
         .flags = 0,
     };
 
-    // TODO: check for write amount of bytes
     _ = try std.posix.sendmsg(writer.context.handle, &sock_msg, 0);
 }
 
+/// Create data container for control messages
 pub fn cmsg(comptime T: type) type {
-    const padding_size = (@sizeOf(T) + @sizeOf(c_long) - 1) & ~(@as(usize, @sizeOf(c_long)) - 1);
+    const msg_size = cmsg_space(@sizeOf(T));
+    const padded_bit_count = 8 * (msg_size - (@sizeOf(c_ulonglong) + (2 * @sizeOf(c_int)) + @sizeOf(T)));
     return packed struct {
-        len: c_ulong = @sizeOf(@This()) - padding_size,
+        len: c_ulonglong = cmsg_len(@sizeOf(T)),
         level: c_int,
         type: c_int,
         data: T,
-        _padding: std.meta.Int(.unsigned, 8 * padding_size) = 0,
+        __padding: std.meta.Int(.unsigned, padded_bit_count) = 0,
+
+        pub const padded_bits = padded_bit_count;
+        pub const padded_bytes = padded_bit_count / 8;
+        pub const size_of_msg = msg_size;
     };
+}
+
+/// ported version of musl libc's CMSG_ALIGN macro for getting alignment of a Control Message
+///
+/// Macro Definition:
+/// #define CMSG_ALIGN(len) (((len) + sizeof (size_t) - 1) & (size_t) ~(sizeof (size_t) - 1))
+fn cmsg_align(len: usize) usize {
+    const size_t = c_ulonglong;
+    return (((len) + @sizeOf(size_t) - 1) & ~(@as(usize, @sizeOf(size_t) - 1)));
+}
+/// ported version of musl libc's CMSG_SPACE macro for getting space of a Control Message
+///
+/// Macro Definition:
+/// #define CMSG_SPACE(len) (CMSG_ALIGN (len) + CMSG_ALIGN (sizeof (struct cmsghdr)))
+fn cmsg_space(len: usize) usize {
+    return cmsg_align(len) + cmsg_align(@sizeOf(std.posix.msghdr));
+}
+/// ported version of musl libc's CMSG_LEN macro for getting length of a Control Message
+///
+/// Macro Definition:
+/// #define CMSG_LEN(len)   (CMSG_ALIGN (sizeof (struct cmsghdr)) + (len))
+fn cmsg_len(len: usize) usize {
+    return cmsg_align(@sizeOf(std.posix.msghdr) + len);
 }
 
 fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {

@@ -16,10 +16,17 @@
           packages = with pkgs; [
             gdb
             lldb
+            mesa
+            shaderc
             valgrind
+            vkdisplayinfo
+            vulkan-extension-layer
+            vulkan-loader
+            vulkan-tools
             zig
           ];
           buildInputs = with pkgs; [
+            shaderc
             zig
           ];
           shellHook = ''
