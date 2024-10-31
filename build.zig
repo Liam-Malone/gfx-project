@@ -50,6 +50,7 @@ pub fn build(b: *std.Build) !void {
 
     const wayland_bindings = bindings_generator.gen_bindings("wayland.zig", b.path("protocols/wayland/wayland.xml"));
     const xdg_shell_bindings = bindings_generator.gen_bindings("xdg_shell.zig", b.path("protocols/wayland/xdg-shell.xml"));
+    const linux_dmabuf_bindings = bindings_generator.gen_bindings("linux_dmabuf.zig", b.path("protocols/wayland/linux-dmabuf-v1.xml"));
 
     const exe = b.addExecutable(.{
         .name = "GfxDemo",
@@ -61,6 +62,7 @@ pub fn build(b: *std.Build) !void {
     exe.root_module.addImport("wl_msg", wl_msg_module);
     exe.root_module.addImport("wayland", wayland_bindings);
     exe.root_module.addImport("xdg_shell", xdg_shell_bindings);
+    exe.root_module.addImport("dmabuf", linux_dmabuf_bindings);
 
     if (b.lazyDependency("vulkan-zig", .{
         .target = target,
