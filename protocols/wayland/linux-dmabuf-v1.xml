@@ -361,8 +361,7 @@
     </event>
 
     <request name="create_immed" since="2">
-      <description summary="immediately create a wl_buffer from the given
-                     dmabufs">
+      <description summary="immediately create a wl_buffer from the given dmabufs">
         This asks for immediate creation of a wl_buffer by importing the
         added dmabufs.
 
