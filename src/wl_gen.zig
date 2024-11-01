@@ -74,6 +74,8 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
             break :blk 0;
         };
         const name = interface_name[underscore_idx..];
+
+        // TODO: Edge-case handling for newlines in description
         if (interface.findChildByTag("description")) |description| {
             if (description.getAttribute("summary")) |summary| {
                 try writer.print(
@@ -195,7 +197,7 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
         idx = 0;
 
         // ------------------------  END INTERFACE  ------------------------
-        try writer.print("}};\n", .{});
+        try writer.print("\n}};\n", .{});
     }
     // ------------------------  END PROTOCOL  ------------------------
 }
