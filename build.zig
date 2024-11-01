@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // BEGIN Wayland-Bindings
     const bindings = b.addExecutable(.{
         .name = "wl_bindings_gen",
         .root_source_file = b.path("src/wl_gen.zig"),
@@ -51,6 +52,12 @@ pub fn build(b: *std.Build) !void {
     const wayland_bindings = bindings_generator.gen_bindings("wayland.zig", b.path("protocols/wayland/wayland.xml"));
     const xdg_shell_bindings = bindings_generator.gen_bindings("xdg_shell.zig", b.path("protocols/wayland/xdg-shell.xml"));
     const linux_dmabuf_bindings = bindings_generator.gen_bindings("linux_dmabuf.zig", b.path("protocols/wayland/linux-dmabuf-v1.xml"));
+    // END Wayland-Bindings
+
+    const zigimg_dependency = b.dependency("zigimg", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const exe = b.addExecutable(.{
         .name = "GfxDemo",
@@ -63,6 +70,8 @@ pub fn build(b: *std.Build) !void {
     exe.root_module.addImport("wayland", wayland_bindings);
     exe.root_module.addImport("xdg_shell", xdg_shell_bindings);
     exe.root_module.addImport("dmabuf", linux_dmabuf_bindings);
+
+    exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 
     if (b.lazyDependency("vulkan-zig", .{
         .target = target,

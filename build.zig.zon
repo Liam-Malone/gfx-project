@@ -6,6 +6,9 @@
             .path = "deps/vulkan-zig",
             .lazy = true,
         },
+        .zigimg = .{
+            .path = "deps/zigimg",
+        },
     },
     .paths = .{
         "README.md",
