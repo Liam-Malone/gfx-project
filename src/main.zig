@@ -240,7 +240,7 @@ pub fn main() !void {
                     .width = shm_buf_width,
                     .height = shm_buf_height,
                     .stride = shm_buf_stride,
-                    .format = .xrgb8888, // TODO :: Add enum generation to bindgen
+                    .format = .xrgb8888,
                 });
 
                 if (!unmapped) {
