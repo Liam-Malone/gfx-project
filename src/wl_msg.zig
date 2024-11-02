@@ -90,7 +90,11 @@ pub fn parse_data(comptime T: type, data: []const u8) !T {
 pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
     var msg_size: usize = Header.Size;
     inline for (std.meta.fields(@TypeOf(item))) |field| {
-        switch (field.type) {
+        const field_type: type = switch (@typeInfo(field.type)) {
+            .@"enum" => u32,
+            else => field.type,
+        };
+        switch (field_type) {
             i32, u32 => {
                 if (!std.mem.eql(u8, field.name, "fd")) msg_size += u32_size;
             },
@@ -129,11 +133,17 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
     }
 
     inline for (std.meta.fields(@TypeOf(item))) |field| {
-        switch (field.type) {
-            u32 => try writer.writeInt(u32, @field(item, field.name), endian),
-            i32 => try writer.writeInt(i32, @field(item, field.name), endian),
-            [:0]const u8 => try write_str(writer, @field(item, field.name)),
-            []const u8 => try write_arr(writer, @field(item, field.name)),
+        const field_type: type = switch (@typeInfo(field.type)) {
+            .@"enum" => u32,
+            else => field.type,
+        };
+        const field_val = @field(item, field.name);
+        const msg_val = if (@typeInfo(field.type) == .@"enum") @intFromEnum(field_val) else field_val;
+        switch (field_type) {
+            u32 => try writer.writeInt(u32, msg_val, endian),
+            i32 => try writer.writeInt(i32, msg_val, endian),
+            [:0]const u8 => try write_str(writer, msg_val),
+            []const u8 => try write_arr(writer, msg_val),
             void => {}, // skip -- should be cmsg
             else => @compileLog("Unsupported field {s} of type {}", .{ field.name, field.type }),
         }

@@ -54,6 +54,8 @@ pub fn main() !void {
         wl_event_it.load_events() catch |err| {
             std.log.err("Failed to load events from socket :: {s}", .{@errorName(err)});
         };
+
+        // Register desired interfaces
         while (wl_event_it.next() catch |err| blk: {
             switch (err) {
                 error.RemoteClosed, error.StreamClosed, error.BrokenPipe => {
@@ -176,6 +178,7 @@ pub fn main() !void {
             shm_fd,
             0,
         );
+
         // hack until @ptrCast + slice len change is implemented
         {
             const data_u32: [*]u32 = @ptrCast(data);
@@ -217,6 +220,7 @@ pub fn main() !void {
         var attached = false;
         var unmapped = false;
 
+        // Looping wl_event handler thread
         const ev_thread = std.Thread.spawn(.{}, handle_wl_events, .{ &state, &wl_event_it }) catch |err| {
             std.log.err("Event thread died with err: {s}", .{@errorName(err)});
 
@@ -236,7 +240,7 @@ pub fn main() !void {
                     .width = shm_buf_width,
                     .height = shm_buf_height,
                     .stride = shm_buf_stride,
-                    .format = 1, // TODO :: Add enum generation to bindgen
+                    .format = .xrgb8888, // TODO :: Add enum generation to bindgen
                 });
 
                 if (!unmapped) {

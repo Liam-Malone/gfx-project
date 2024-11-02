@@ -99,6 +99,40 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
                 interface_version,
             },
         );
+
+        var enum_iter = interface.findChildrenByTag("enum");
+        while (enum_iter.next()) |enum_type| {
+            const enum_name = enum_type.getAttribute("name").?;
+            if (enum_type.findChildByTag("description")) |description|
+                if (description.getAttribute("summary")) |summary| {
+                    try writer.print(
+                        \\
+                        \\    /// {s}
+                        \\
+                    , .{summary});
+                } else {
+                    try writer.print("\n", .{});
+                };
+
+            var enum_field_iter = enum_type.findChildrenByTag("entry");
+            try writer.print("    pub const {s} = enum (u32) {{\n", .{snakeToPascal(enum_name)});
+            while (enum_field_iter.next()) |enum_entry| {
+                if (enum_entry.getAttribute("summary")) |summary| {
+                    try writer.print(
+                        \\
+                        \\        /// {s}
+                        \\
+                    , .{summary});
+                } else {
+                    try writer.print("\n", .{});
+                }
+                const entry_name = enum_entry.getAttribute("name").?;
+                const entry_value = enum_entry.getAttribute("value").?;
+                try writer.print("        @\"{s}\" = {s},", .{ entry_name, entry_value });
+            }
+            try writer.print("\n    }};", .{});
+        }
+
         var idx: usize = 0;
         var request_iter = interface.findChildrenByTag("request");
         while (request_iter.next()) |req| : (idx += 1) {
@@ -219,6 +253,7 @@ fn write_req_params(writer: anytype, req: *xml.Element, idx: usize) !void {
         const arg_interface_opt = arg.getAttribute("interface");
         const arg_name = arg.getAttribute("name").?;
         const arg_type: Arg.Type = try Arg.Type.from_string(arg.getAttribute("type").?);
+        const arg_enum_type = arg.getAttribute("enum");
 
         if (arg.getAttribute("summary")) |summary| {
             try writer.print(
@@ -233,12 +268,38 @@ fn write_req_params(writer: anytype, req: *xml.Element, idx: usize) !void {
                 \\
             , .{ arg_name, arg_name });
         }
-        try writer.print("        {s}: {s},\n", .{ arg_name, arg_type.to_zig_type_string().? });
+        try writer.print("        {s}: ", .{arg_name});
+        if (arg_enum_type) |enum_type| {
+            try writer.print("{s},\n", .{snakeToPascal(enum_to_str(enum_type))});
+        } else {
+            try writer.print("{s},\n", .{arg_type.to_zig_type_string().?});
+        }
     }
     try writer.print(
         \\    }};
         \\
     , .{});
+}
+
+fn enum_to_str(enum_str: []const u8) []const u8 {
+    const upper_idx = blk: {
+        for (enum_str, 0..) |char, idx| {
+            if (char == '.')
+                break :blk idx + 1;
+        }
+        break :blk 0;
+    };
+    const underscore_idx = if (upper_idx == 0) 0 else blk: {
+        for (enum_str, 0..) |char, idx| {
+            if (char == '_')
+                break :blk idx + 1;
+        }
+        break :blk 0;
+    };
+    var name = @constCast(enum_str[underscore_idx..]);
+    name[0] = std.ascii.toUpper(name[0]);
+    name[upper_idx - underscore_idx] = std.ascii.toUpper(name[upper_idx - underscore_idx]);
+    return name;
 }
 
 pub fn generate(allocator: Allocator, xml_filename: []const u8, spec_xml: []const u8, writer: anytype) !void {
