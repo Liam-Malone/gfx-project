@@ -650,8 +650,7 @@
     </request>
 
     <enum name="error">
-      <entry name="invalid_resize_edge" value="0" summary="provided value is
-        not a valid variant of the resize_edge enum"/>
+      <entry name="invalid_resize_edge" value="0" summary="provided value is not a valid variant of the resize_edge enum"/>
       <entry name="invalid_parent" value="1"
         summary="invalid parent toplevel"/>
       <entry name="invalid_size" value="2"
