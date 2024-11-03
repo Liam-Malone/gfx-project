@@ -53,7 +53,6 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
         };
         const name = interface_name[underscore_idx..];
 
-        // TODO: Edge-case handling for newlines in description
         if (interface.findChildByTag("description")) |description| {
             if (description.getAttribute("summary")) |summary| {
                 try writer.print(
@@ -187,7 +186,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
                 }
                 try writer.print("        }};", .{});
             }
-            // TODO: Parse function generation
+
             event_iter = interface.findChildrenByTag("event"); // reset
             try writer.print(
                 \\
