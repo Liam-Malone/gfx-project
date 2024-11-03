@@ -29,8 +29,8 @@ pub fn build(b: *std.Build) !void {
 
     // BEGIN Wayland-Bindings
     const bindings = b.addExecutable(.{
-        .name = "wl_bindings_gen",
-        .root_source_file = b.path("src/wl_gen.zig"),
+        .name = "wl_specgen",
+        .root_source_file = b.path("src/wl_specgen.zig"),
         .target = target,
         .optimize = optimize,
     });

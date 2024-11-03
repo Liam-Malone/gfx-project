@@ -5,50 +5,31 @@ const Arena = std.heap.ArenaAllocator;
 const xml = @import("xml.zig");
 const stdout = std.io.getStdOut().writer();
 
-const wl_tags = enum {
-    protocol, // root --> file level
-    interface, // struct -> toplevel
-    event, // struct -> within interface
-    request, // method -> within interface
-    arg, // method/event argument
-    errors, // error results
-};
+const Type = enum {
+    int,
+    uint,
+    fixed,
+    string,
+    object,
+    new_id,
+    array,
+    fd,
 
-const Arg = struct {
-    name: []const u8,
-    summary: []const u8,
-    type: Type,
-
-    const Type = enum {
-        int,
-        uint,
-        fixed,
-        string,
-        object,
-        new_id,
-        array,
-        fd,
-
-        pub fn from_string(s: []const u8) !Type {
-            return std.meta.stringToEnum(Arg.Type, s) orelse {
-                return error.UnknownType;
-            };
-        }
-        pub fn to_zig_type_string(self: Type) ?[]const u8 {
-            return switch (self) {
-                .fd => "wl_msg.FileDescriptor", // fd will be sent through cmsg, not main send
-                .int => "i32",
-                .fixed => "f32",
-                .array => "[]const u8",
-                .string => "[:0]const u8",
-                .uint, .object, .new_id => "u32",
-            };
-        }
-    };
-};
-
-const Generator = struct {
-    arena: std.heap.ArenaAllocator,
+    pub fn from_string(s: []const u8) !Type {
+        return std.meta.stringToEnum(Type, s) orelse {
+            return error.UnknownType;
+        };
+    }
+    pub fn to_zig_type_string(self: Type) ?[]const u8 {
+        return switch (self) {
+            .fd => "wl_msg.FileDescriptor", // fd will be sent through cmsg, not main send
+            .int => "i32",
+            .fixed => "f32",
+            .array => "[]const u8",
+            .string => "[:0]const u8",
+            .uint, .object, .new_id => "u32",
+        };
+    }
 };
 
 // for each interface:
@@ -57,13 +38,10 @@ const Generator = struct {
 // take events too
 //
 
-pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !void {
+pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
     // ------------------------ BEGIN PROTOCOL ------------------------
-    _ = allocator;
     var interface_iter = root.findChildrenByTag("interface");
     while (interface_iter.next()) |interface| {
-        const interface_description = interface.findChildByTag("description").?;
-        _ = interface_description;
         const interface_name = interface.getAttribute("name").?;
         const interface_version = interface.getAttribute("version").?;
         const underscore_idx = blk: {
@@ -80,9 +58,9 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
             if (description.getAttribute("summary")) |summary| {
                 try writer.print(
                     \\
-                    \\/// {s}
+                    \\///{s}
                     \\
-                , .{summary});
+                , .{IgnoreNewline{ .str = summary }});
             }
         } else {
             try writer.writeAll("\n");
@@ -107,9 +85,9 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
                 if (description.getAttribute("summary")) |summary| {
                     try writer.print(
                         \\
-                        \\    /// {s}
+                        \\    ///{s}
                         \\
-                    , .{summary});
+                    , .{IgnoreNewline{ .str = summary }});
                 } else {
                     try writer.print("\n", .{});
                 };
@@ -120,9 +98,9 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
                 if (enum_entry.getAttribute("summary")) |summary| {
                     try writer.print(
                         \\
-                        \\        /// {s}
+                        \\        ///{s}
                         \\
-                    , .{summary});
+                    , .{IgnoreNewline{ .str = summary }});
                 } else {
                     try writer.print("\n", .{});
                 }
@@ -142,9 +120,9 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
                 if (description.getAttribute("summary")) |summary| {
                     try writer.print(
                         \\
-                        \\    /// {s}
+                        \\    ///{s}
                         \\
-                    , .{summary});
+                    , .{IgnoreNewline{ .str = summary }});
                 }
             } else {
                 try writer.writeAll("\n");
@@ -185,6 +163,13 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
             while (event_iter.next()) |ev| {
                 const ev_name = ev.getAttribute("name").?;
 
+                if (ev.findChildByTag("description")) |description|
+                    if (description.getAttribute("summary")) |summary|
+                        try writer.print(
+                            \\
+                            \\
+                            \\        ///{s}
+                        , .{IgnoreNewline{ .str = summary }});
                 try writer.print(
                     \\
                     \\        pub const {s} = struct {{
@@ -196,7 +181,7 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
                     try writer.print("\n             {s}", .{arg_name});
                     const arg_t_opt = ev_arg.getAttribute("type");
                     if (arg_t_opt) |arg_t|
-                        try writer.print(": {s},", .{(try Arg.Type.from_string(arg_t)).to_zig_type_string().?})
+                        try writer.print(": {s},", .{(try Type.from_string(arg_t)).to_zig_type_string().?})
                     else
                         try writer.print(",", .{});
                 }
@@ -205,6 +190,7 @@ pub fn gen_protocol(allocator: Allocator, writer: anytype, root: *xml.Element) !
             // TODO: Parse function generation
             event_iter = interface.findChildrenByTag("event"); // reset
             try writer.print(
+                \\
                 \\        pub fn parse(op: u32, data: []const u8) !Event {{
                 \\            return switch (op) {{
                 \\
@@ -252,14 +238,14 @@ fn write_req_params(writer: anytype, req: *xml.Element, idx: usize) !void {
     while (arg_iter.next()) |arg| {
         const arg_interface_opt = arg.getAttribute("interface");
         const arg_name = arg.getAttribute("name").?;
-        const arg_type: Arg.Type = try Arg.Type.from_string(arg.getAttribute("type").?);
+        const arg_type: Type = try Type.from_string(arg.getAttribute("type").?);
         const arg_enum_type = arg.getAttribute("enum");
 
         if (arg.getAttribute("summary")) |summary| {
             try writer.print(
-                \\        /// {s}
+                \\        ///{s}
                 \\
-            , .{summary});
+            , .{IgnoreNewline{ .str = summary }});
         }
         if (arg_type == .new_id and arg_interface_opt == null) {
             try writer.print(
@@ -321,16 +307,10 @@ pub fn generate(allocator: Allocator, xml_filename: []const u8, spec_xml: []cons
     }
 
     try writer.print(
-        \\// This file is auto-generated by Zig-Wayland-Generator
-        \\//
-        \\// These bindings are *NOT* libwayland bindings. These bindings are for
-        \\// interacting directly with the wayland socket.
-        \\//
-        \\// These bindings are somewhat incomplete. I hacked this together in 
-        \\// one night, so I only made sure features I would immediately use are 
-        \\// present and included.
+        \\// This file is auto-generated by wl-specgen
         \\//
         \\// TODO: Put a useful message in here when this thing is ready.
+        \\//
         \\
         \\const std = @import("std");
         \\const log = std.log.scoped(.{s});
@@ -338,16 +318,8 @@ pub fn generate(allocator: Allocator, xml_filename: []const u8, spec_xml: []cons
         \\const wl_msg = @import("wl_msg"); // It's assumed that the user provides this module
         \\
     , .{scope_name});
-    try gen_protocol(allocator, writer, spec.root);
 
-    // defer spec.deinit();
-    // var gen: Generator = .init(allocator, spec.root) catch |err| {
-    //     std.log.err("Failed to init generator with err: {s}", .{@errorName(err)});
-    // };
-    // defer gen.deinit();
-    // gen.render(writer) catch |err| {
-    //     std.log.err("Failed to render with err: {s}", .{@errorName(err)});
-    // };
+    try gen_protocol(writer, spec.root);
 }
 
 pub fn main() !void {
@@ -473,6 +445,31 @@ fn reportParseErrors(tree: std.zig.Ast) !void {
     }
 }
 
+const IgnoreNewline = struct {
+    str: []const u8,
+
+    pub fn format(
+        self: *const IgnoreNewline,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        var it = std.mem.splitScalar(u8, self.str, '\n');
+        while (it.next()) |substr| {
+            if (substr.len > 0) {
+                // first non-space character
+                const start_idx = blk: {
+                    for (substr, 0..) |char, idx| {
+                        if (char != ' ' and char != '\t')
+                            break :blk idx;
+                    }
+                    break :blk 0;
+                };
+                try writer.print(" {s}", .{substr[start_idx..]});
+            }
+        }
+    }
+};
 // Taken from Sphaerophoria -- https://github.com/sphaerophoria/sphwayland-client
 //-------------------------------------------------------------------------------
 const SnakeToPascal = struct {
