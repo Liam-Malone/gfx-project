@@ -7,14 +7,17 @@ const Arena = std.heap.ArenaAllocator;
 const xdg = @import("xdg_shell");
 const wl = @import("wayland");
 const wl_msg = @import("wl_msg");
+
 const wl_log = std.log.scoped(.wayland);
 const Header = wl_msg.Header;
+
+const app_log = std.log.scoped(.app);
 
 pub fn main() !void {
     const return_val: anyerror!void = exit: {
         const stdout = std.io.getStdOut().writer();
         stdout.print("Hello, Wayland!\n", .{}) catch |err| {
-            std.log.err("Failed to write to stdout with err: {s}", .{@errorName(err)});
+            app_log.err("Failed to write to stdout with err: {s}", .{@errorName(err)});
         };
 
         const arena_backer: Allocator = std.heap.page_allocator;
@@ -23,7 +26,7 @@ pub fn main() !void {
         const arena_allocator: Allocator = arena.allocator();
 
         const socket: std.net.Stream = connect_display(arena_allocator) catch |err| {
-            std.log.err("Failed to connect to wayland socket with error: {s}\nExiting program now", .{@errorName(err)});
+            app_log.err("Failed to connect to wayland socket with error: {s}\nExiting program now", .{@errorName(err)});
             break :exit err;
         };
         defer socket.close();
@@ -34,12 +37,12 @@ pub fn main() !void {
         display.get_registry(socket.writer(), .{
             .registry = registry.id,
         }) catch |err| {
-            std.log.err("Failed to establish registry with error: {s}\nExiting program", .{@errorName(err)});
+            app_log.err("Failed to establish registry with error: {s}\nExiting program", .{@errorName(err)});
             break :exit err;
         };
 
         var interface_registry: InterfaceRegistry = InterfaceRegistry.init(arena_allocator, registry) catch |err| {
-            std.log.err("Failed to initialize Wayland Interface Registry. Program Cannot Proceed :: {s}", .{@errorName(err)});
+            app_log.err("Failed to initialize Wayland Interface Registry. Program Cannot Proceed :: {s}", .{@errorName(err)});
             break :exit err;
         };
         defer interface_registry.deinit();
@@ -52,44 +55,44 @@ pub fn main() !void {
 
         var wl_event_it: EventIt(4096) = .init(socket);
         wl_event_it.load_events() catch |err| {
-            std.log.err("Failed to load events from socket :: {s}", .{@errorName(err)});
+            app_log.err("Failed to load events from socket :: {s}", .{@errorName(err)});
         };
 
         // Register desired interfaces
         while (wl_event_it.next() catch |err| blk: {
             switch (err) {
                 error.RemoteClosed, error.StreamClosed, error.BrokenPipe => {
-                    std.log.err("Wayland Socket Disconnected. Program Cannot Proceed :: {s}", .{@errorName(err)});
+                    app_log.err("Wayland Socket Disconnected. Program Cannot Proceed :: {s}", .{@errorName(err)});
                     break :exit err;
                 },
                 else => {
-                    std.log.err("Event retrieval failed with err: {s}", .{@errorName(err)});
+                    app_log.err("Event retrieval failed with err: {s}", .{@errorName(err)});
                 },
             }
             break :blk Event.nil;
         }) |ev| {
             const interface: InterfaceType = interface_registry.get(ev.header.id) orelse blk: {
-                std.log.warn("Recived response for unknown interface: {d}", .{ev.header.id});
+                app_log.warn("Recived response for unknown interface: {d}", .{ev.header.id});
                 break :blk .nil_ev;
             };
             switch (interface) {
                 .nil_ev => {}, // Do nothing, this is invalid
                 .display => {
                     const response_opt = wl.Display.Event.parse(ev.header.op, ev.data) catch |err| blk: {
-                        std.log.err("Failed to parse wl_display event with err: {s}", .{@errorName(err)});
+                        app_log.err("Failed to parse wl_display event with err: {s}", .{@errorName(err)});
                         break :blk null;
                     };
                     if (response_opt) |response|
                         switch (response) {
                             .err => |err| log_display_err(err),
                             .delete_id => {
-                                std.log.warn("Unexpected object delete during binding phase", .{});
+                                app_log.warn("Unexpected object delete during binding phase", .{});
                             },
                         };
                 },
                 .registry => {
                     const action_opt = wl.Registry.Event.parse(ev.header.op, ev.data) catch |err| blk: {
-                        std.log.err("Failed to parse wl_registry event with err: {s}", .{@errorName(err)});
+                        app_log.err("Failed to parse wl_registry event with err: {s}", .{@errorName(err)});
                         break :blk null;
                     };
                     if (action_opt) |action|
@@ -103,68 +106,85 @@ pub fn main() !void {
                                     xdg_wm_base,
                                 };
                                 const interface_name = std.meta.stringToEnum(desired_interfaces, global.interface) orelse blk: {
-                                    std.log.debug("Unused interface: {s}", .{global.interface});
+                                    app_log.debug("Unused interface: {s}", .{global.interface});
                                     break :blk .nil_opt;
                                 };
                                 switch (interface_name) {
                                     .nil_opt => {}, // do nothing,
                                     .wl_seat => wl_seat_opt = interface_registry.bind(wl.Seat, sock_writer, global) catch |err| nil: {
-                                        std.log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
+                                        app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
                                     .wl_shm => wl_shm_opt = try interface_registry.bind(wl.Shm, sock_writer, global),
                                     .wl_compositor => compositor_opt = interface_registry.bind(wl.Compositor, sock_writer, global) catch |err| nil: {
-                                        std.log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
+                                        app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
                                     .xdg_wm_base => xdg_wm_base_opt = interface_registry.bind(xdg.WmBase, sock_writer, global) catch |err| nil: {
-                                        std.log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
+                                        app_log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
                                 }
                             },
                             .global_remove => {
-                                std.log.warn("No registry to remove global from", .{});
+                                app_log.warn("No registry to remove global from", .{});
                             },
                         };
                 },
                 else => {
                     log_unused_event(interface, ev) catch |err| {
-                        std.log.err("Failed to log unused event with err: {s}", .{@errorName(err)});
+                        app_log.err("Failed to log unused event with err: {s}", .{@errorName(err)});
                     };
                 },
             }
         }
 
         const compositor: wl.Compositor = compositor_opt orelse {
-            wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(error.NoWaylandCompositor)});
-            break :exit error.NoWaylandCompositor;
+            const err = error.NoWaylandCompositor;
+            wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+            break :exit err;
         };
         const xdg_wm_base: xdg.WmBase = xdg_wm_base_opt orelse {
-            wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(error.NoXdgWmBase)});
-            break :exit error.NoXdgWmBase;
+            const err = error.NoXdgWmBase;
+            wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+            break :exit err;
         };
+        defer xdg_wm_base.destroy(sock_writer, .{});
 
         // TODO: Add err handling
-        const wl_seat: wl.Seat = wl_seat_opt orelse break :exit error.NoWaylandSeat;
-        const wl_shm: wl.Shm = wl_shm_opt orelse break :exit error.NoShm;
+        const wl_seat: wl.Seat = wl_seat_opt orelse {
+            const err = error.NoWaylandSeat;
+            wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+            break :exit err;
+        };
+        defer wl_seat.release(sock_writer, .{});
+        const wl_shm: wl.Shm = wl_shm_opt orelse {
+            const err = error.NoShm;
+            wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+            break :exit err;
+        };
+        defer wl_shm.release(sock_writer, .{});
 
         const wl_surface: wl.Surface = try interface_registry.register(wl.Surface);
         try compositor.create_surface(sock_writer, .{ .id = wl_surface.id });
+        defer wl_surface.destroy(sock_writer, .{});
 
         const xdg_surface = try interface_registry.register(xdg.Surface);
         try xdg_wm_base.get_xdg_surface(sock_writer, .{
             .id = xdg_surface.id,
             .surface = wl_surface.id,
         });
+        defer xdg_surface.destroy(sock_writer, .{});
+
         const xdg_toplevel = try interface_registry.register(xdg.Toplevel);
         try xdg_surface.get_toplevel(sock_writer, .{ .id = xdg_toplevel.id });
-        std.debug.print("XDG Toplevel id: {d}\n", .{xdg_toplevel.id});
+        defer xdg_toplevel.destroy(sock_writer, .{});
 
         try wl_surface.commit(sock_writer, .{});
 
-        const shm_buf_width = 960;
-        const shm_buf_height = 540;
+        const scale = 60;
+        const shm_buf_width = 16 * scale;
+        const shm_buf_height = 10 * scale;
         const shm_buf_stride = shm_buf_width * 4;
         const shm_buf_size = shm_buf_stride * shm_buf_height;
         const shm_fd = try std.posix.memfd_create("Zig-Wire Wayland", 0);
@@ -222,7 +242,7 @@ pub fn main() !void {
 
         // Looping wl_event handler thread
         const ev_thread = std.Thread.spawn(.{}, handle_wl_events, .{ &state, &wl_event_it }) catch |err| {
-            std.log.err("Event thread died with err: {s}", .{@errorName(err)});
+            app_log.err("Event thread died with err: {s}", .{@errorName(err)});
 
             break :exit err;
         };
@@ -231,7 +251,6 @@ pub fn main() !void {
         while (state.running) {
             if (state.config_acked and !attached) {
                 attached = true;
-                std.debug.print("looping again\n", .{});
 
                 try wl_shm.create_pool(sock_writer, .{ .id = shm_pool.id, .fd = shm_fd, .size = shm_buf_size });
                 try shm_pool.create_buffer(sock_writer, .{
@@ -286,11 +305,11 @@ fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
         const ev = event_iterator.next() catch |err| blk: {
             switch (err) {
                 error.RemoteClosed, error.BrokenPipe, error.StreamClosed => {
-                    std.log.err("encountered err: {any}", .{err});
+                    app_log.err("encountered err: {any}", .{err});
                     return err;
                 },
                 else => {
-                    std.log.err("encountered err: {any}", .{err});
+                    app_log.err("encountered err: {any}", .{err});
                 },
             }
             break :blk Event.nil;
@@ -329,8 +348,8 @@ fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
                             _ = configure; // compositor can't tell me what to do!!!
                         },
                         .close => { //  Empty struct, nothing to capture
-                            std.log.warn("toplevel close handling not yet implemented", .{});
-                            std.log.info("server is closing this toplevel", .{});
+                            app_log.warn("toplevel close handling not yet implemented", .{});
+                            app_log.info("server is closing this toplevel", .{});
                             state.running = false;
                             break;
                         },
@@ -462,48 +481,48 @@ const InterfaceRegistry = struct {
 
 fn log_unused_event(interface: InterfaceType, event: Event) !void {
     switch (interface) {
-        .nil_ev => std.log.debug("Encountered unused nil event", .{}),
+        .nil_ev => app_log.debug("Encountered unused nil event", .{}),
         .display => {
             const parsed = try wl.Display.Event.parse(event.header.op, event.data);
             switch (parsed) {
                 .err => |err| log_display_err(err),
                 else => {
-                    std.log.debug("Unused event: {any}", .{parsed});
+                    app_log.debug("Unused event: {any}", .{parsed});
                 },
             }
         },
         .registry => {
-            std.log.debug("Unused event: {any}", .{try wl.Registry.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Registry.Event.parse(event.header.op, event.data)});
         },
         .wl_seat => {
-            std.log.debug("Unused event: {any}", .{try wl.Seat.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Seat.Event.parse(event.header.op, event.data)});
         },
         .wl_shm => {
-            std.log.debug("Unused event: {any}", .{try wl.Shm.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Shm.Event.parse(event.header.op, event.data)});
         },
         .wl_shm_pool => {
             // doesn't exist
         },
         .wl_surface => {
-            std.log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(event.header.op, event.data)});
         },
         .compositor => {
-            std.log.debug("Unused compositor event", .{});
+            app_log.debug("Unused compositor event", .{});
         },
         .wl_callback => {
-            std.log.debug("Unused event: {any}", .{try wl.Callback.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Callback.Event.parse(event.header.op, event.data)});
         },
         .wl_buffer => {
-            std.log.debug("Unused event: {any}", .{try wl.Buffer.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Buffer.Event.parse(event.header.op, event.data)});
         },
         .xdg_wm_base => {
-            std.log.debug("Unused event: {any}", .{try xdg.WmBase.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.WmBase.Event.parse(event.header.op, event.data)});
         },
         .xdg_surface => {
-            std.log.debug("Unused event: {any}", .{try xdg.Surface.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.Surface.Event.parse(event.header.op, event.data)});
         },
         .xdg_toplevel => {
-            std.log.debug("Unused event: {any}", .{try xdg.Toplevel.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.Toplevel.Event.parse(event.header.op, event.data)});
         },
     }
 }
