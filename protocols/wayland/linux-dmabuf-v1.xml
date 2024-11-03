@@ -220,7 +220,8 @@
       <entry name="out_of_bounds" value="6"
              summary="offset + stride * height goes out of dmabuf bounds"/>
       <entry name="invalid_wl_buffer" value="7"
-             summary="invalid wl_buffer resulted from importing dmabufs via the create_immed request on given buffer_params"/>
+             summary="invalid wl_buffer resulted from importing dmabufs via
+               the create_immed request on given buffer_params"/>
     </enum>
 
     <request name="destroy" type="destructor">
@@ -360,7 +361,8 @@
     </event>
 
     <request name="create_immed" since="2">
-      <description summary="immediately create a wl_buffer from the given dmabufs">
+      <description summary="immediately create a wl_buffer from the given
+                     dmabufs">
         This asks for immediate creation of a wl_buffer by importing the
         added dmabufs.
 
