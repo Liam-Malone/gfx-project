@@ -144,41 +144,54 @@ pub fn main() !void {
             wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
             break :exit err;
         };
+
         const xdg_wm_base: xdg.WmBase = xdg_wm_base_opt orelse {
             const err = error.NoXdgWmBase;
             wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
             break :exit err;
         };
-        defer xdg_wm_base.destroy(sock_writer, .{});
+        defer xdg_wm_base.destroy(sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send destroy message to xdg_wm_base:: Error: {s}", .{@errorName(err)});
+        };
 
-        // TODO: Add err handling
         const wl_seat: wl.Seat = wl_seat_opt orelse {
             const err = error.NoWaylandSeat;
             wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
             break :exit err;
         };
-        defer wl_seat.release(sock_writer, .{});
+        defer wl_seat.release(sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to wl_seat:: Error: {s}", .{@errorName(err)});
+        };
+
         const wl_shm: wl.Shm = wl_shm_opt orelse {
             const err = error.NoShm;
             wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
             break :exit err;
         };
-        defer wl_shm.release(sock_writer, .{});
+        defer wl_shm.release(sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to wl_shm:: Error: {s}", .{@errorName(err)});
+        };
 
         const wl_surface: wl.Surface = try interface_registry.register(wl.Surface);
         try compositor.create_surface(sock_writer, .{ .id = wl_surface.id });
-        defer wl_surface.destroy(sock_writer, .{});
+        defer wl_surface.destroy(sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send destroy message to wl_surface:: Error: {s}", .{@errorName(err)});
+        };
 
         const xdg_surface = try interface_registry.register(xdg.Surface);
         try xdg_wm_base.get_xdg_surface(sock_writer, .{
             .id = xdg_surface.id,
             .surface = wl_surface.id,
         });
-        defer xdg_surface.destroy(sock_writer, .{});
+        defer xdg_surface.destroy(sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to xdg_surface:: Error: {s}", .{@errorName(err)});
+        };
 
         const xdg_toplevel = try interface_registry.register(xdg.Toplevel);
         try xdg_surface.get_toplevel(sock_writer, .{ .id = xdg_toplevel.id });
-        defer xdg_toplevel.destroy(sock_writer, .{});
+        defer xdg_toplevel.destroy(sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to xdg_toplevel:: Error: {s}", .{@errorName(err)});
+        };
 
         try wl_surface.commit(sock_writer, .{});
 
