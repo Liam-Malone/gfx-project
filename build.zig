@@ -66,10 +66,19 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    exe.root_module.addImport("wl_msg", wl_msg_module);
-    exe.root_module.addImport("wayland", wayland_bindings);
-    exe.root_module.addImport("xdg_shell", xdg_shell_bindings);
-    exe.root_module.addImport("dmabuf", linux_dmabuf_bindings);
+    // TODO: Add windows and eventually macos support
+    switch (target.result.os.tag) {
+        .linux => {
+            exe.root_module.addImport("wl_msg", wl_msg_module);
+            exe.root_module.addImport("wayland", wayland_bindings);
+            exe.root_module.addImport("xdg_shell", xdg_shell_bindings);
+            exe.root_module.addImport("dmabuf", linux_dmabuf_bindings);
+        },
+        else => {
+            std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
+            std.process.exit(1);
+        },
+    }
 
     exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 

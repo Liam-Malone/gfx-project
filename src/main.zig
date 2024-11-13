@@ -4,17 +4,19 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Arena = std.heap.ArenaAllocator;
 
-const xdg = @import("xdg_shell");
 const wl = @import("wayland");
+const dmab = @import("dmabuf");
 const wl_msg = @import("wl_msg");
+const xdg = @import("xdg_shell");
 
 const wl_log = std.log.scoped(.wayland);
 const Header = wl_msg.Header;
 
 const app_log = std.log.scoped(.app);
 
+// TODO: Remove all `try` usage from main()
 pub fn main() !void {
-    const return_val: anyerror!void = exit: {
+    const return_val: void = exit: {
         const stdout = std.io.getStdOut().writer();
         stdout.print("Hello, Wayland!\n", .{}) catch |err| {
             app_log.err("Failed to write to stdout with err: {s}", .{@errorName(err)});
@@ -52,6 +54,7 @@ pub fn main() !void {
         var wl_shm_opt: ?wl.Shm = null;
         var compositor_opt: ?wl.Compositor = null;
         var xdg_wm_base_opt: ?xdg.WmBase = null;
+        var dmabuf_opt: ?dmab.LinuxDmabufV1 = null;
 
         var wl_event_it: EventIt(4096) = .init(socket);
         wl_event_it.load_events() catch |err| {
@@ -104,6 +107,8 @@ pub fn main() !void {
                                     wl_shm,
                                     wl_compositor,
                                     xdg_wm_base,
+                                    zxdg_decoration_manager_v1,
+                                    zwp_linux_dmabuf_v1,
                                 };
                                 const interface_name = std.meta.stringToEnum(desired_interfaces, global.interface) orelse blk: {
                                     app_log.debug("Unused interface: {s}", .{global.interface});
@@ -115,13 +120,21 @@ pub fn main() !void {
                                         app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
-                                    .wl_shm => wl_shm_opt = try interface_registry.bind(wl.Shm, sock_writer, global),
+                                    .wl_shm => wl_shm_opt = interface_registry.bind(wl.Shm, sock_writer, global) catch |err| nil: {
+                                        app_log.err("Failed to bind wl_shm with error: {s}", .{@errorName(err)});
+                                        break :nil null;
+                                    },
                                     .wl_compositor => compositor_opt = interface_registry.bind(wl.Compositor, sock_writer, global) catch |err| nil: {
                                         app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
                                     .xdg_wm_base => xdg_wm_base_opt = interface_registry.bind(xdg.WmBase, sock_writer, global) catch |err| nil: {
                                         app_log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
+                                        break :nil null;
+                                    },
+                                    .zxdg_decoration_manager_v1 => {}, //nothing for now
+                                    .zwp_linux_dmabuf_v1 => dmabuf_opt = interface_registry.bind(dmab.LinuxDmabufV1, sock_writer, global) catch |err| nil: {
+                                        app_log.err("Failed to bind linux_dmabuf with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
                                 }
@@ -163,6 +176,12 @@ pub fn main() !void {
             wl_log.err("Failed to send release message to wl_seat:: Error: {s}", .{@errorName(err)});
         };
 
+        const dmabuf: dmab.LinuxDmabufV1 = dmabuf_opt orelse {
+            const err = error.NoDmabuf;
+            wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+            break :exit err;
+        };
+
         const wl_shm: wl.Shm = wl_shm_opt orelse {
             const err = error.NoShm;
             wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
@@ -195,6 +214,31 @@ pub fn main() !void {
 
         try wl_surface.commit(sock_writer, .{});
 
+        // create shm pool
+        // delay sending messages about these until after ACK-ing configurations
+        const shm_pool: wl.ShmPool = try interface_registry.register(wl.ShmPool);
+        const wl_buffer: wl.Buffer = try interface_registry.register(wl.Buffer);
+
+        var state: State = .{
+            .display = display,
+            .registry = registry,
+            .compositor = compositor,
+            .interface_registry = interface_registry,
+            .seat = wl_seat,
+            .shm = wl_shm,
+            .xdg_wm_base = xdg_wm_base,
+            .dmabuf = dmabuf,
+
+            .sock_writer = sock_writer,
+            .shm_pool = shm_pool,
+            .wl_buffer = wl_buffer,
+            .wl_surface = wl_surface,
+            .xdg_surface = xdg_surface,
+            .xdg_toplevel = xdg_toplevel,
+            .config_acked = false,
+            .running = true,
+        };
+
         const scale = 60;
         const shm_buf_width = 16 * scale;
         const shm_buf_height = 10 * scale;
@@ -226,37 +270,12 @@ pub fn main() !void {
                 }
             }
         }
-        // create shm pool
-        // delay these until after ACK-ing configurations
-        const shm_pool: wl.ShmPool = try interface_registry.register(wl.ShmPool);
-        const wl_buffer: wl.Buffer = try interface_registry.register(wl.Buffer);
-
-        var state: State = .{
-            .display = display,
-            .registry = registry,
-            .compositor = compositor,
-            .interface_registry = interface_registry,
-            .seat = wl_seat,
-            .shm = wl_shm,
-            .xdg_wm_base = xdg_wm_base,
-
-            .sock_writer = sock_writer,
-            .shm_pool = shm_pool,
-            .wl_buffer = wl_buffer,
-            .wl_surface = wl_surface,
-            .xdg_surface = xdg_surface,
-            .xdg_toplevel = xdg_toplevel,
-            .config_acked = false,
-            .running = true,
-        };
-
         var attached = false;
         var unmapped = false;
 
         // Looping wl_event handler thread
         const ev_thread = std.Thread.spawn(.{}, handle_wl_events, .{ &state, &wl_event_it }) catch |err| {
             app_log.err("Event thread died with err: {s}", .{@errorName(err)});
-
             break :exit err;
         };
 
@@ -265,9 +284,9 @@ pub fn main() !void {
             if (state.config_acked and !attached) {
                 attached = true;
 
-                try wl_shm.create_pool(sock_writer, .{ .id = shm_pool.id, .fd = shm_fd, .size = shm_buf_size });
-                try shm_pool.create_buffer(sock_writer, .{
-                    .id = wl_buffer.id,
+                try state.shm.create_pool(state.sock_writer, .{ .id = state.shm_pool.id, .fd = shm_fd, .size = shm_buf_size });
+                try state.shm_pool.create_buffer(state.sock_writer, .{
+                    .id = state.wl_buffer.id,
                     .offset = 0,
                     .width = shm_buf_width,
                     .height = shm_buf_height,
@@ -289,8 +308,12 @@ pub fn main() !void {
             }
         }
         ev_thread.join();
+    } catch |err| { // program err exit path
+        app_log.err("Program exiting due to error: {s}", .{@errorName(err)});
+        std.process.exit(1);
     };
 
+    // program err-free exit path
     return return_val;
 }
 
@@ -302,6 +325,7 @@ const State = struct {
     seat: wl.Seat,
     shm: wl.Shm,
     xdg_wm_base: xdg.WmBase,
+    dmabuf: dmab.LinuxDmabufV1,
 
     sock_writer: std.net.Stream.Writer,
     shm_pool: wl.ShmPool,
@@ -311,6 +335,10 @@ const State = struct {
     xdg_toplevel: xdg.Toplevel,
     config_acked: bool,
     running: bool,
+
+    pub fn deinit(state: *State) !void {
+        state.xdg_wm_base.destroy(state.sock_writer, .{});
+    }
 };
 
 fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
@@ -413,6 +441,9 @@ const InterfaceType = enum {
     xdg_wm_base,
     xdg_surface,
     xdg_toplevel,
+    dmabuf,
+    dmabuf_params,
+    dmabuf_feedback,
 
     pub fn from_type(comptime T: type) !InterfaceType {
         return switch (T) {
@@ -429,6 +460,10 @@ const InterfaceType = enum {
             xdg.WmBase => .xdg_wm_base,
             xdg.Surface => .xdg_surface,
             xdg.Toplevel => .xdg_toplevel,
+
+            dmab.LinuxDmabufV1 => .dmabuf,
+            dmab.LinuxBufferParamsV1 => .dmabuf_params,
+            dmab.LinuxDmabufFeedbackV1 => .dmabuf_feedback,
 
             else => {
                 @compileLog("Unsupported interface: {s}", .{@typeName(T)});
@@ -536,6 +571,15 @@ fn log_unused_event(interface: InterfaceType, event: Event) !void {
         },
         .xdg_toplevel => {
             app_log.debug("Unused event: {any}", .{try xdg.Toplevel.Event.parse(event.header.op, event.data)});
+        },
+        .dmabuf => {
+            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufV1.Event.parse(event.header.op, event.data)});
+        },
+        .dmabuf_params => {
+            app_log.debug("Unused event: {any}", .{try dmab.LinuxBufferParamsV1.Event.parse(event.header.op, event.data)});
+        },
+        .dmabuf_feedback => {
+            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufFeedbackV1.Event.parse(event.header.op, event.data)});
         },
     }
 }
