@@ -31,6 +31,7 @@
           ];
           shellHook = ''
             alias zig14='$HOME/personal/zig/zig14/zig'
+            alias zig="zig14";
           '';
         };
       });

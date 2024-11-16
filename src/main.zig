@@ -4,10 +4,12 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Arena = std.heap.ArenaAllocator;
 
+const wl_msg = @import("wl_msg");
+
 const wl = @import("wayland");
 const dmab = @import("dmabuf");
-const wl_msg = @import("wl_msg");
 const xdg = @import("xdg_shell");
+const xdgd = @import("xdg_decoration");
 
 const wl_log = std.log.scoped(.wayland);
 const Header = wl_msg.Header;
@@ -55,6 +57,7 @@ pub fn main() !void {
         var compositor_opt: ?wl.Compositor = null;
         var xdg_wm_base_opt: ?xdg.WmBase = null;
         var dmabuf_opt: ?dmab.LinuxDmabufV1 = null;
+        var xdg_decoration_opt: ?xdgd.DecorationManagerV1 = null;
 
         var wl_event_it: EventIt(4096) = .init(socket);
         wl_event_it.load_events() catch |err| {
@@ -132,7 +135,10 @@ pub fn main() !void {
                                         app_log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
                                         break :nil null;
                                     },
-                                    .zxdg_decoration_manager_v1 => {}, //nothing for now
+                                    .zxdg_decoration_manager_v1 => xdg_decoration_opt = interface_registry.bind(xdgd.DecorationManagerV1, sock_writer, global) catch |err| nil: {
+                                        app_log.err("Failed to bind zxdg__decoration_manager with error: {s}", .{@errorName(err)});
+                                        break :nil null;
+                                    },
                                     .zwp_linux_dmabuf_v1 => dmabuf_opt = interface_registry.bind(dmab.LinuxDmabufV1, sock_writer, global) catch |err| nil: {
                                         app_log.err("Failed to bind linux_dmabuf with error: {s}", .{@errorName(err)});
                                         break :nil null;
@@ -165,6 +171,12 @@ pub fn main() !void {
         };
         defer xdg_wm_base.destroy(sock_writer, .{}) catch |err| {
             wl_log.err("Failed to send destroy message to xdg_wm_base:: Error: {s}", .{@errorName(err)});
+        };
+
+        const xdg_decoration_manager = xdg_decoration_opt orelse {
+            const err = error.NoXdgDecorationManager;
+            wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+            break :exit err;
         };
 
         const wl_seat: wl.Seat = wl_seat_opt orelse {
@@ -214,6 +226,8 @@ pub fn main() !void {
 
         try wl_surface.commit(sock_writer, .{});
 
+        const decoration_toplevel = try interface_registry.register(xdgd.ToplevelDecorationV1);
+        try xdg_decoration_manager.get_toplevel_decoration(sock_writer, .{ .id = decoration_toplevel.id, .toplevel = xdg_toplevel.id });
         // create shm pool
         // delay sending messages about these until after ACK-ing configurations
         const shm_pool: wl.ShmPool = try interface_registry.register(wl.ShmPool);
@@ -227,6 +241,7 @@ pub fn main() !void {
             .seat = wl_seat,
             .shm = wl_shm,
             .xdg_wm_base = xdg_wm_base,
+            .decoration_manager = xdg_decoration_manager,
             .dmabuf = dmabuf,
 
             .sock_writer = sock_writer,
@@ -235,6 +250,7 @@ pub fn main() !void {
             .wl_surface = wl_surface,
             .xdg_surface = xdg_surface,
             .xdg_toplevel = xdg_toplevel,
+            .decoration_toplevel = decoration_toplevel,
             .config_acked = false,
             .running = true,
         };
@@ -325,6 +341,7 @@ const State = struct {
     seat: wl.Seat,
     shm: wl.Shm,
     xdg_wm_base: xdg.WmBase,
+    decoration_manager: xdgd.DecorationManagerV1,
     dmabuf: dmab.LinuxDmabufV1,
 
     sock_writer: std.net.Stream.Writer,
@@ -333,6 +350,7 @@ const State = struct {
     wl_surface: wl.Surface,
     xdg_surface: xdg.Surface,
     xdg_toplevel: xdg.Toplevel,
+    decoration_toplevel: xdgd.ToplevelDecorationV1,
     config_acked: bool,
     running: bool,
 
@@ -441,6 +459,8 @@ const InterfaceType = enum {
     xdg_wm_base,
     xdg_surface,
     xdg_toplevel,
+    xdg_decoration_manager,
+    xdg_decoration_toplevel,
     dmabuf,
     dmabuf_params,
     dmabuf_feedback,
@@ -460,6 +480,9 @@ const InterfaceType = enum {
             xdg.WmBase => .xdg_wm_base,
             xdg.Surface => .xdg_surface,
             xdg.Toplevel => .xdg_toplevel,
+
+            xdgd.DecorationManagerV1 => .xdg_decoration_manager,
+            xdgd.ToplevelDecorationV1 => .xdg_decoration_toplevel,
 
             dmab.LinuxDmabufV1 => .dmabuf,
             dmab.LinuxBufferParamsV1 => .dmabuf_params,
@@ -548,15 +571,11 @@ fn log_unused_event(interface: InterfaceType, event: Event) !void {
         .wl_shm => {
             app_log.debug("Unused event: {any}", .{try wl.Shm.Event.parse(event.header.op, event.data)});
         },
-        .wl_shm_pool => {
-            // doesn't exist
-        },
+        .wl_shm_pool => unreachable, // wl_shm_pool has no events
         .wl_surface => {
             app_log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(event.header.op, event.data)});
         },
-        .compositor => {
-            app_log.debug("Unused compositor event", .{});
-        },
+        .compositor => unreachable, // wl_compositor has no events
         .wl_callback => {
             app_log.debug("Unused event: {any}", .{try wl.Callback.Event.parse(event.header.op, event.data)});
         },
@@ -571,6 +590,10 @@ fn log_unused_event(interface: InterfaceType, event: Event) !void {
         },
         .xdg_toplevel => {
             app_log.debug("Unused event: {any}", .{try xdg.Toplevel.Event.parse(event.header.op, event.data)});
+        },
+        .xdg_decoration_manager => unreachable, // xdg_decoration_manager has no events
+        .xdg_decoration_toplevel => {
+            app_log.debug("Unused event: {any}", .{try xdgd.ToplevelDecorationV1.Event.parse(event.header.op, event.data)});
         },
         .dmabuf => {
             app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufV1.Event.parse(event.header.op, event.data)});
