@@ -50,210 +50,195 @@ pub fn main() !void {
             break :exit err;
         };
         defer interface_registry.deinit();
+        var wl_event_it: EventIt(4096) = .init(socket);
 
         // bind interfaces
-        var wl_seat_opt: ?wl.Seat = null;
-        var wl_shm_opt: ?wl.Shm = null;
-        var compositor_opt: ?wl.Compositor = null;
-        var xdg_wm_base_opt: ?xdg.WmBase = null;
-        var dmabuf_opt: ?dmab.LinuxDmabufV1 = null;
-        var xdg_decoration_opt: ?xdgd.DecorationManagerV1 = null;
-
-        var wl_event_it: EventIt(4096) = .init(socket);
-        wl_event_it.load_events() catch |err| {
-            app_log.err("Failed to load events from socket :: {s}", .{@errorName(err)});
-        };
-
-        // Register desired interfaces
-        while (wl_event_it.next() catch |err| blk: {
-            switch (err) {
-                error.RemoteClosed, error.StreamClosed, error.BrokenPipe => {
-                    app_log.err("Wayland Socket Disconnected. Program Cannot Proceed :: {s}", .{@errorName(err)});
-                    break :exit err;
-                },
-                else => {
-                    app_log.err("Event retrieval failed with err: {s}", .{@errorName(err)});
-                },
-            }
-            break :blk Event.nil;
-        }) |ev| {
-            const interface: InterfaceType = interface_registry.get(ev.header.id) orelse blk: {
-                app_log.warn("Recived response for unknown interface: {d}", .{ev.header.id});
-                break :blk .nil_ev;
+        var state: State = state: {
+            var wl_seat_opt: ?wl.Seat = null;
+            var wl_shm_opt: ?wl.Shm = null;
+            var compositor_opt: ?wl.Compositor = null;
+            var xdg_wm_base_opt: ?xdg.WmBase = null;
+            var dmabuf_opt: ?dmab.LinuxDmabufV1 = null;
+            var xdg_decoration_opt: ?xdgd.DecorationManagerV1 = null;
+            wl_event_it.load_events() catch |err| {
+                app_log.err("Failed to load events from socket :: {s}", .{@errorName(err)});
             };
-            switch (interface) {
-                .nil_ev => {}, // Do nothing, this is invalid
-                .display => {
-                    const response_opt = wl.Display.Event.parse(ev.header.op, ev.data) catch |err| blk: {
-                        app_log.err("Failed to parse wl_display event with err: {s}", .{@errorName(err)});
-                        break :blk null;
-                    };
-                    if (response_opt) |response|
-                        switch (response) {
-                            .err => |err| log_display_err(err),
-                            .delete_id => {
-                                app_log.warn("Unexpected object delete during binding phase", .{});
-                            },
+
+            // Register desired interfaces
+            while (wl_event_it.next() catch |err| blk: {
+                switch (err) {
+                    error.RemoteClosed, error.StreamClosed, error.BrokenPipe => {
+                        app_log.err("Wayland Socket Disconnected. Program Cannot Proceed :: {s}", .{@errorName(err)});
+                        break :exit err;
+                    },
+                    else => {
+                        app_log.err("Event retrieval failed with err: {s}", .{@errorName(err)});
+                    },
+                }
+                break :blk Event.nil;
+            }) |ev| {
+                const interface: InterfaceType = interface_registry.get(ev.header.id) orelse blk: {
+                    app_log.warn("Recived response for unknown interface: {d}", .{ev.header.id});
+                    break :blk .nil_ev;
+                };
+                switch (interface) {
+                    .nil_ev => {}, // Do nothing, this is invalid
+                    .display => {
+                        const response_opt = wl.Display.Event.parse(ev.header.op, ev.data) catch |err| blk: {
+                            app_log.err("Failed to parse wl_display event with err: {s}", .{@errorName(err)});
+                            break :blk null;
                         };
-                },
-                .registry => {
-                    const action_opt = wl.Registry.Event.parse(ev.header.op, ev.data) catch |err| blk: {
-                        app_log.err("Failed to parse wl_registry event with err: {s}", .{@errorName(err)});
-                        break :blk null;
-                    };
-                    if (action_opt) |action|
-                        switch (action) {
-                            .global => |global| {
-                                const desired_interfaces = enum {
-                                    nil_opt,
-                                    wl_seat,
-                                    wl_shm,
-                                    wl_compositor,
-                                    xdg_wm_base,
-                                    zxdg_decoration_manager_v1,
-                                    zwp_linux_dmabuf_v1,
-                                };
-                                const interface_name = std.meta.stringToEnum(desired_interfaces, global.interface) orelse blk: {
-                                    app_log.debug("Unused interface: {s}", .{global.interface});
-                                    break :blk .nil_opt;
-                                };
-                                switch (interface_name) {
-                                    .nil_opt => {}, // do nothing,
-                                    .wl_seat => wl_seat_opt = interface_registry.bind(wl.Seat, sock_writer, global) catch |err| nil: {
-                                        app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
-                                        break :nil null;
-                                    },
-                                    .wl_shm => wl_shm_opt = interface_registry.bind(wl.Shm, sock_writer, global) catch |err| nil: {
-                                        app_log.err("Failed to bind wl_shm with error: {s}", .{@errorName(err)});
-                                        break :nil null;
-                                    },
-                                    .wl_compositor => compositor_opt = interface_registry.bind(wl.Compositor, sock_writer, global) catch |err| nil: {
-                                        app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
-                                        break :nil null;
-                                    },
-                                    .xdg_wm_base => xdg_wm_base_opt = interface_registry.bind(xdg.WmBase, sock_writer, global) catch |err| nil: {
-                                        app_log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
-                                        break :nil null;
-                                    },
-                                    .zxdg_decoration_manager_v1 => xdg_decoration_opt = interface_registry.bind(xdgd.DecorationManagerV1, sock_writer, global) catch |err| nil: {
-                                        app_log.err("Failed to bind zxdg__decoration_manager with error: {s}", .{@errorName(err)});
-                                        break :nil null;
-                                    },
-                                    .zwp_linux_dmabuf_v1 => dmabuf_opt = interface_registry.bind(dmab.LinuxDmabufV1, sock_writer, global) catch |err| nil: {
-                                        app_log.err("Failed to bind linux_dmabuf with error: {s}", .{@errorName(err)});
-                                        break :nil null;
-                                    },
-                                }
-                            },
-                            .global_remove => {
-                                app_log.warn("No registry to remove global from", .{});
-                            },
+                        if (response_opt) |response|
+                            switch (response) {
+                                .err => |err| log_display_err(err),
+                                .delete_id => {
+                                    app_log.warn("Unexpected object delete during binding phase", .{});
+                                },
+                            };
+                    },
+                    .registry => {
+                        const action_opt = wl.Registry.Event.parse(ev.header.op, ev.data) catch |err| blk: {
+                            app_log.err("Failed to parse wl_registry event with err: {s}", .{@errorName(err)});
+                            break :blk null;
                         };
-                },
-                else => {
-                    log_unused_event(interface, ev) catch |err| {
-                        app_log.err("Failed to log unused event with err: {s}", .{@errorName(err)});
-                    };
-                },
+                        if (action_opt) |action|
+                            switch (action) {
+                                .global => |global| {
+                                    const desired_interfaces = enum {
+                                        nil_opt,
+                                        wl_seat,
+                                        wl_shm,
+                                        wl_compositor,
+                                        xdg_wm_base,
+                                        zxdg_decoration_manager_v1,
+                                        zwp_linux_dmabuf_v1,
+                                    };
+                                    const interface_name = std.meta.stringToEnum(desired_interfaces, global.interface) orelse blk: {
+                                        app_log.debug("Unused interface: {s}", .{global.interface});
+                                        break :blk .nil_opt;
+                                    };
+                                    switch (interface_name) {
+                                        .nil_opt => {}, // do nothing,
+                                        .wl_seat => wl_seat_opt = interface_registry.bind(wl.Seat, sock_writer, global) catch |err| nil: {
+                                            app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
+                                            break :nil null;
+                                        },
+                                        .wl_shm => wl_shm_opt = interface_registry.bind(wl.Shm, sock_writer, global) catch |err| nil: {
+                                            app_log.err("Failed to bind wl_shm with error: {s}", .{@errorName(err)});
+                                            break :nil null;
+                                        },
+                                        .wl_compositor => compositor_opt = interface_registry.bind(wl.Compositor, sock_writer, global) catch |err| nil: {
+                                            app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
+                                            break :nil null;
+                                        },
+                                        .xdg_wm_base => xdg_wm_base_opt = interface_registry.bind(xdg.WmBase, sock_writer, global) catch |err| nil: {
+                                            app_log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
+                                            break :nil null;
+                                        },
+                                        .zxdg_decoration_manager_v1 => xdg_decoration_opt = interface_registry.bind(xdgd.DecorationManagerV1, sock_writer, global) catch |err| nil: {
+                                            app_log.err("Failed to bind zxdg__decoration_manager with error: {s}", .{@errorName(err)});
+                                            break :nil null;
+                                        },
+                                        .zwp_linux_dmabuf_v1 => dmabuf_opt = interface_registry.bind(dmab.LinuxDmabufV1, sock_writer, global) catch |err| nil: {
+                                            app_log.err("Failed to bind linux_dmabuf with error: {s}", .{@errorName(err)});
+                                            break :nil null;
+                                        },
+                                    }
+                                },
+                                .global_remove => {
+                                    app_log.warn("No registry to remove global from", .{});
+                                },
+                            };
+                    },
+                    else => {
+                        log_unused_event(interface, ev) catch |err| {
+                            app_log.err("Failed to log unused event with err: {s}", .{@errorName(err)});
+                        };
+                    },
+                }
             }
-        }
 
-        const compositor: wl.Compositor = compositor_opt orelse {
-            const err = error.NoWaylandCompositor;
-            wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
-            break :exit err;
+            const compositor: wl.Compositor = compositor_opt orelse {
+                const err = error.NoWaylandCompositor;
+                wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+
+            const xdg_wm_base: xdg.WmBase = xdg_wm_base_opt orelse {
+                const err = error.NoXdgWmBase;
+                wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+
+            const xdg_decoration_manager = xdg_decoration_opt orelse {
+                const err = error.NoXdgDecorationManager;
+                wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+
+            const wl_seat: wl.Seat = wl_seat_opt orelse {
+                const err = error.NoWaylandSeat;
+                wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+
+            const dmabuf: dmab.LinuxDmabufV1 = dmabuf_opt orelse {
+                const err = error.NoDmabuf;
+                wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+
+            const wl_shm: wl.Shm = wl_shm_opt orelse {
+                const err = error.NoShm;
+                wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+
+            const wl_surface: wl.Surface = try interface_registry.register(wl.Surface);
+            try compositor.create_surface(sock_writer, .{ .id = wl_surface.id });
+
+            const xdg_surface = try interface_registry.register(xdg.Surface);
+            try xdg_wm_base.get_xdg_surface(sock_writer, .{
+                .id = xdg_surface.id,
+                .surface = wl_surface.id,
+            });
+
+            const xdg_toplevel = try interface_registry.register(xdg.Toplevel);
+            try xdg_surface.get_toplevel(sock_writer, .{ .id = xdg_toplevel.id });
+
+            try wl_surface.commit(sock_writer, .{});
+
+            const decoration_toplevel = try interface_registry.register(xdgd.ToplevelDecorationV1);
+            try xdg_decoration_manager.get_toplevel_decoration(sock_writer, .{ .id = decoration_toplevel.id, .toplevel = xdg_toplevel.id });
+            // create shm pool
+            // delay sending messages about these until after ACK-ing configurations
+            const shm_pool: wl.ShmPool = try interface_registry.register(wl.ShmPool);
+            const wl_buffer: wl.Buffer = try interface_registry.register(wl.Buffer);
+
+            break :state .{
+                .display = display,
+                .registry = registry,
+                .compositor = compositor,
+                .interface_registry = interface_registry,
+                .seat = wl_seat,
+                .shm = wl_shm,
+                .xdg_wm_base = xdg_wm_base,
+                .decoration_manager = xdg_decoration_manager,
+                .dmabuf = dmabuf,
+
+                .sock_writer = sock_writer,
+                .shm_pool = shm_pool,
+                .wl_buffer = wl_buffer,
+                .wl_surface = wl_surface,
+                .xdg_surface = xdg_surface,
+                .xdg_toplevel = xdg_toplevel,
+                .decoration_toplevel = decoration_toplevel,
+                .config_acked = false,
+                .running = true,
+            };
         };
 
-        const xdg_wm_base: xdg.WmBase = xdg_wm_base_opt orelse {
-            const err = error.NoXdgWmBase;
-            wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
-            break :exit err;
-        };
-        defer xdg_wm_base.destroy(sock_writer, .{}) catch |err| {
-            wl_log.err("Failed to send destroy message to xdg_wm_base:: Error: {s}", .{@errorName(err)});
-        };
-
-        const xdg_decoration_manager = xdg_decoration_opt orelse {
-            const err = error.NoXdgDecorationManager;
-            wl_log.err("Fatal error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
-            break :exit err;
-        };
-
-        const wl_seat: wl.Seat = wl_seat_opt orelse {
-            const err = error.NoWaylandSeat;
-            wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
-            break :exit err;
-        };
-        defer wl_seat.release(sock_writer, .{}) catch |err| {
-            wl_log.err("Failed to send release message to wl_seat:: Error: {s}", .{@errorName(err)});
-        };
-
-        const dmabuf: dmab.LinuxDmabufV1 = dmabuf_opt orelse {
-            const err = error.NoDmabuf;
-            wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
-            break :exit err;
-        };
-
-        const wl_shm: wl.Shm = wl_shm_opt orelse {
-            const err = error.NoShm;
-            wl_log.err("Fatal Error encountered, program cannot continue. Error: {s}", .{@errorName(err)});
-            break :exit err;
-        };
-        defer wl_shm.release(sock_writer, .{}) catch |err| {
-            wl_log.err("Failed to send release message to wl_shm:: Error: {s}", .{@errorName(err)});
-        };
-
-        const wl_surface: wl.Surface = try interface_registry.register(wl.Surface);
-        try compositor.create_surface(sock_writer, .{ .id = wl_surface.id });
-        defer wl_surface.destroy(sock_writer, .{}) catch |err| {
-            wl_log.err("Failed to send destroy message to wl_surface:: Error: {s}", .{@errorName(err)});
-        };
-
-        const xdg_surface = try interface_registry.register(xdg.Surface);
-        try xdg_wm_base.get_xdg_surface(sock_writer, .{
-            .id = xdg_surface.id,
-            .surface = wl_surface.id,
-        });
-        defer xdg_surface.destroy(sock_writer, .{}) catch |err| {
-            wl_log.err("Failed to send release message to xdg_surface:: Error: {s}", .{@errorName(err)});
-        };
-
-        const xdg_toplevel = try interface_registry.register(xdg.Toplevel);
-        try xdg_surface.get_toplevel(sock_writer, .{ .id = xdg_toplevel.id });
-        defer xdg_toplevel.destroy(sock_writer, .{}) catch |err| {
-            wl_log.err("Failed to send release message to xdg_toplevel:: Error: {s}", .{@errorName(err)});
-        };
-
-        try wl_surface.commit(sock_writer, .{});
-
-        const decoration_toplevel = try interface_registry.register(xdgd.ToplevelDecorationV1);
-        try xdg_decoration_manager.get_toplevel_decoration(sock_writer, .{ .id = decoration_toplevel.id, .toplevel = xdg_toplevel.id });
-        // create shm pool
-        // delay sending messages about these until after ACK-ing configurations
-        const shm_pool: wl.ShmPool = try interface_registry.register(wl.ShmPool);
-        const wl_buffer: wl.Buffer = try interface_registry.register(wl.Buffer);
-
-        var state: State = .{
-            .display = display,
-            .registry = registry,
-            .compositor = compositor,
-            .interface_registry = interface_registry,
-            .seat = wl_seat,
-            .shm = wl_shm,
-            .xdg_wm_base = xdg_wm_base,
-            .decoration_manager = xdg_decoration_manager,
-            .dmabuf = dmabuf,
-
-            .sock_writer = sock_writer,
-            .shm_pool = shm_pool,
-            .wl_buffer = wl_buffer,
-            .wl_surface = wl_surface,
-            .xdg_surface = xdg_surface,
-            .xdg_toplevel = xdg_toplevel,
-            .decoration_toplevel = decoration_toplevel,
-            .config_acked = false,
-            .running = true,
-        };
+        defer state.deinit();
 
         const scale = 60;
         const shm_buf_width = 16 * scale;
@@ -315,12 +300,12 @@ pub fn main() !void {
                     unmapped = true;
                 }
 
-                try wl_surface.attach(sock_writer, .{
-                    .buffer = wl_buffer.id,
+                try state.wl_surface.attach(state.sock_writer, .{
+                    .buffer = state.wl_buffer.id,
                     .x = 0,
                     .y = 0,
                 });
-                try wl_surface.commit(sock_writer, .{});
+                try state.wl_surface.commit(state.sock_writer, .{});
             }
         }
         ev_thread.join();
@@ -354,8 +339,46 @@ const State = struct {
     config_acked: bool,
     running: bool,
 
-    pub fn deinit(state: *State) !void {
-        state.xdg_wm_base.destroy(state.sock_writer, .{});
+    pub fn deinit(state: *State) void {
+        state.xdg_wm_base.destroy(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send destroy message to xdg_wm_base:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.decoration_manager.destroy(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.shm.release(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to wl_shm:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.shm_pool.destroy(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send destroy message to wl_shm_pool:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.wl_surface.destroy(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send destroy message to wl_surface:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.xdg_surface.destroy(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to xdg_surface:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.xdg_toplevel.destroy(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to xdg_toplevel:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.decoration_toplevel.destroy(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to xdg_decoration_toplevel:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.decoration_manager.destroy(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send destroy message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
+        };
+
+        state.seat.release(state.sock_writer, .{}) catch |err| {
+            wl_log.err("Failed to send release message to wl_seat:: Error: {s}", .{@errorName(err)});
+        };
     }
 };
 
@@ -407,8 +430,8 @@ fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
                             _ = configure; // compositor can't tell me what to do!!!
                         },
                         .close => { //  Empty struct, nothing to capture
-                            app_log.warn("toplevel close handling not yet implemented", .{});
                             app_log.info("server is closing this toplevel", .{});
+                            app_log.warn("toplevel close handling not yet fully implemented", .{});
                             state.running = false;
                             break;
                         },
