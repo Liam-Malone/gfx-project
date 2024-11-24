@@ -23,6 +23,7 @@
             vulkan-extension-layer
             vulkan-loader
             vulkan-tools
+            vulkan-headers
             zig
           ];
           buildInputs = with pkgs; [

@@ -72,13 +72,14 @@ const EventParser = struct {
 
 pub fn parse_data(comptime T: type, data: []const u8) !T {
     var event_result: T = undefined;
-    var ev_iter: EventParser = .{ .buf = data };
+    var data_iter: EventParser = .{ .buf = data };
+
     inline for (std.meta.fields(T)) |field| {
         @field(event_result, field.name) = switch (field.type) {
-            u32 => try ev_iter.get_u32(),
-            i32 => try ev_iter.get_i32(),
-            [:0]const u8 => try ev_iter.get_string(),
-            []const u8 => try ev_iter.get_arr(),
+            u32 => try data_iter.get_u32(),
+            i32 => try data_iter.get_i32(),
+            [:0]const u8 => try data_iter.get_string(),
+            []const u8 => try data_iter.get_arr(),
             else => {
                 @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type });
             },
