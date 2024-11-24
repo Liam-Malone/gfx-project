@@ -28,17 +28,17 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     // BEGIN Wayland-Bindings
-    const bindings = b.addExecutable(.{
-        .name = "wl_specgen",
-        .root_source_file = b.path("src/wl_specgen.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const wl_msg_module = b.addModule("wl_msg", .{
         .root_source_file = b.path("src/wl_msg.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const bindgen = b.addExecutable(.{
+        .name = "wl-zig-bindgen",
+        .root_source_file = b.path("src/wl-zig-bindgen.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
     });
 
     const bindings_generator: BindingsGenerator = .{
@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
         .wl_msg = wl_msg_module,
-        .binding_gen = bindings,
+        .binding_gen = bindgen,
     };
 
     const wayland_bindings = bindings_generator.gen_bindings("wayland.zig", b.path("protocols/wayland/wayland.xml"));
@@ -101,4 +101,29 @@ pub fn build(b: *std.Build) !void {
 
     const run_step = b.step("run", "Run Program");
     run_step.dependOn(&run_cmd.step);
+
+    const exe_unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    // TODO: Add windows and eventually macos support
+    switch (target.result.os.tag) {
+        .linux => {
+            exe_unit_tests.root_module.addImport("wl_msg", wl_msg_module);
+            exe_unit_tests.root_module.addImport("wayland", wayland_bindings);
+            exe_unit_tests.root_module.addImport("xdg_shell", xdg_shell_bindings);
+            exe_unit_tests.root_module.addImport("xdg_decoration", xdg_decoration_bindings);
+            exe_unit_tests.root_module.addImport("dmabuf", linux_dmabuf_bindings);
+        },
+        else => {
+            std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
+            std.process.exit(1);
+        },
+    }
+    exe_unit_tests.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
+
+    const test_step = b.step("test", "Run Tests");
+    test_step.dependOn(&run_exe_unit_tests.step);
 }
