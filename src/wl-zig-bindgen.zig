@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Arena = std.heap.ArenaAllocator;
+const Arena = @import("Arena.zig");
 
 const xml = @import("xml.zig");
 const stdout = std.io.getStdOut().writer();
@@ -318,8 +318,8 @@ pub fn generate(allocator: Allocator, xml_filename: []const u8, spec_xml: []cons
 }
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
+    var arena = Arena.init(.default);
+    defer arena.release();
     const allocator = arena.allocator();
 
     var args = std.process.argsWithAllocator(allocator) catch |err| switch (err) {

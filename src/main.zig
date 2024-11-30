@@ -1,31 +1,28 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const arena_impl = @import("arena.zig");
-const Arena = arena_impl.Arena;
-
 const wl_msg = @import("wl_msg");
-
 const wl = @import("wayland");
 const dmab = @import("dmabuf");
 const xdg = @import("xdg_shell");
 const xdgd = @import("xdg_decoration");
 
-const vk = @import("vulkan");
-
 const wl_log = std.log.scoped(.wayland);
 const Header = wl_msg.Header;
+
+const vk = @import("vulkan");
+
+const Arena = @import("Arena.zig");
 
 const app_log = std.log.scoped(.app);
 
 // TODO: Remove all `try` usage from main()
 pub fn main() !void {
-    // var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    // defer gpa.deinit();
     const return_val: void = exit: {
         var arena: *Arena = .init(.default);
         defer arena.release();
 
+        std.debug.print("sizeof(Arena) = {d}\n", .{@sizeOf(Arena)});
         const socket: std.net.Stream = connect_display(arena) catch |err| {
             app_log.err("Failed to connect to wayland socket with error: {s}\nExiting program now", .{@errorName(err)});
             break :exit err;
