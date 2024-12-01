@@ -507,7 +507,22 @@ fn log_unused_event(interface: InterfaceType, event: Event) !void {
             app_log.debug("Unused event: {any}", .{try wl.Registry.Event.parse(event.header.op, event.data)});
         },
         .wl_seat => {
-            app_log.debug("Unused event: {any}", .{try wl.Seat.Event.parse(event.header.op, event.data)});
+            const ev = try wl.Seat.Event.parse(event.header.op, event.data);
+            switch (ev) {
+                .name => |name| {
+                    app_log.debug("Unused wl_seat event: wl.Seat Name {s}", .{name.name});
+                },
+                .capabilities => |capabilities| {
+                    app_log.debug(
+                        "Unused wl_seat event: wl.Seat Capabilities: pointer {any}, keyboard: {any}, touch: {any}",
+                        .{
+                            capabilities.capabilities.pointer,
+                            capabilities.capabilities.keyboard,
+                            capabilities.capabilities.touch,
+                        },
+                    );
+                },
+            }
         },
         .wl_surface => {
             app_log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(event.header.op, event.data)});

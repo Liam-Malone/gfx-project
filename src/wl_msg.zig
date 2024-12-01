@@ -80,8 +80,14 @@ pub fn parse_data(comptime T: type, data: []const u8) !T {
             i32 => try data_iter.get_i32(),
             [:0]const u8 => try data_iter.get_string(),
             []const u8 => try data_iter.get_arr(),
-            else => {
-                @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type });
+            else => parse: {
+                switch (@typeInfo(field.type)) {
+                    .@"enum" => break :parse @enumFromInt(try data_iter.get_u32()),
+                    .@"struct" => |@"struct"| if (@"struct".layout == .@"packed") {
+                        break :parse @bitCast(try data_iter.get_u32());
+                    },
+                    else => @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type }),
+                }
             },
         };
     }
@@ -93,6 +99,7 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
     inline for (std.meta.fields(@TypeOf(item))) |field| {
         const field_type: type = switch (@typeInfo(field.type)) {
             .@"enum" => u32,
+            .@"struct" => |@"struct"| if (@"struct".layout == .@"packed") u32 else field.type,
             else => field.type,
         };
         switch (field_type) {
@@ -136,10 +143,16 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
     inline for (std.meta.fields(@TypeOf(item))) |field| {
         const field_type: type = switch (@typeInfo(field.type)) {
             .@"enum" => u32,
+            .@"struct" => |@"struct"| if (@"struct".layout == .@"packed") u32 else field.type,
             else => field.type,
         };
+
         const field_val = @field(item, field.name);
-        const msg_val = if (@typeInfo(field.type) == .@"enum") @intFromEnum(field_val) else field_val;
+        const msg_val = switch (@typeInfo(field.type)) {
+            .@"enum" => @intFromEnum(field_val),
+            .@"struct" => @as(u32, @bitCast(field_val)),
+            else => field_val,
+        };
         switch (field_type) {
             u32 => try writer.writeInt(u32, msg_val, endian),
             i32 => try writer.writeInt(i32, msg_val, endian),
