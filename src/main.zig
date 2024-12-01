@@ -13,6 +13,7 @@ const Header = wl_msg.Header;
 const vk = @import("vulkan");
 
 const Arena = @import("Arena.zig");
+const GraphicsContext = @import("GraphicsContext.zig");
 
 const app_log = std.log.scoped(.app);
 
@@ -204,14 +205,19 @@ pub fn main() !void {
                 };
             };
 
-            // Create Vulkan Instance
-            {
-                // TODO
-            }
+            // Create Vulkan Graphics Context
+            const graphics_context = graphics_context: {
+                break :graphics_context GraphicsContext.init(arena.allocator(), "Simp Window", .{ .width = 400, .height = 400 }, false);
+            } catch |err| {
+                app_log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
+                break :exit error.InitializationFailed;
+            };
 
             break :state .{
                 .wayland = wl_state,
-                .vulkan = .{},
+                .vulkan = .{
+                    .graphics_context = graphics_context,
+                },
                 .running = true,
             };
         };
@@ -224,8 +230,13 @@ pub fn main() !void {
         };
 
         // main loop
+        while (!state.xdg_surface_acked) {
+            // Wait for initial xdg_surface config ack
+        }
+
         while (state.running) {
             // Do stuff
+
         }
         ev_thread.join();
     } catch |err| { // program err exit path
@@ -254,13 +265,17 @@ const State = struct {
         xdg_toplevel: xdg.Toplevel,
         decoration_toplevel: xdgd.ToplevelDecorationV1,
     };
-    const Vulkan = struct {};
+    const Vulkan = struct {
+        graphics_context: GraphicsContext,
+    };
 
     wayland: Wayland,
     vulkan: Vulkan,
     running: bool,
+    xdg_surface_acked: bool = false,
 
     pub fn deinit(state: *State) void {
+        // Wayland Deinit
         {
             var wl_state = state.wayland;
             wl_state.xdg_wm_base.destroy(wl_state.sock_writer, .{}) catch |err| {
@@ -294,6 +309,10 @@ const State = struct {
             wl_state.seat.release(wl_state.sock_writer, .{}) catch |err| {
                 wl_log.err("Failed to send release message to wl_seat:: Error: {s}", .{@errorName(err)});
             };
+        }
+        // Vulkan deinit
+        {
+            state.vulkan.graphics_context.deinit();
         }
     }
 };
@@ -335,6 +354,7 @@ fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
                     switch (action) {
                         .configure => |configure| {
                             try wl_state.xdg_surface.ack_configure(wl_state.sock_writer, .{ .serial = configure.serial });
+                            wl_state.xdg_surface_acked = true;
                         },
                     };
             },

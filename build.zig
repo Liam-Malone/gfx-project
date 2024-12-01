@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) !void {
         .name = "wl-zig-bindgen",
         .root_source_file = b.path("src/wl-zig-bindgen.zig"),
         .target = target,
-        .optimize = .ReleaseSafe,
+        .optimize = optimize,
     });
 
     const bindings_generator: BindingsGenerator = .{
@@ -65,6 +65,7 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
     // TODO: Add windows and eventually macos support
@@ -91,6 +92,7 @@ pub fn build(b: *std.Build) !void {
     })) |vkzig_dep| {
         const vkzig_bindings = vkzig_dep.module("vulkan-zig");
         exe.root_module.addImport("vulkan", vkzig_bindings);
+        exe.linkSystemLibrary("vulkan");
     }
 
     b.installArtifact(exe);
