@@ -228,17 +228,93 @@ pub fn main() !void {
             app_log.err("Event thread died with err: {s}", .{@errorName(err)});
             break :exit err;
         };
+        defer ev_thread.join();
 
         // main loop
-        while (!state.xdg_surface_acked) {
+        while (!state.wayland.xdg_surface_acked) {
             // Wait for initial xdg_surface config ack
         }
 
         while (state.running) {
             // Do stuff
+            const vk_dev = state.vulkan.graphics_context.dev;
+            const vk_image = vk_dev.wrapper.createImage(vk_dev.handle, &.{
+                .image_type = .@"2d",
+                .extent = .{
+                    .width = 600,
+                    .height = 600,
+                    .depth = 1,
+                },
+                .mip_levels = 1,
+                .array_layers = 1,
+                .format = .r8g8b8a8_unorm,
+                .tiling = .optimal,
+                .initial_layout = .undefined,
+                .usage = .{
+                    .transfer_src_bit = true,
+                    .color_attachment_bit = true,
+                },
+                .samples = .{ .@"1_bit" = true },
+                .sharing_mode = .exclusive,
+            }, null) catch |err| {
+                app_log.err("Failed to create VkImage with error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
 
+            const vk_image_view = vk_dev.wrapper.createImageView(vk_dev.handle, &.{
+                .image = vk_image,
+                .view_type = .@"2d",
+                .format = .r8g8b8a8_unorm,
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+                .components = undefined,
+            }, null) catch |err| {
+                app_log.err("Failed to create VkImageView with error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+            _ = vk_image_view;
+
+            const mem_reqs = vk_dev.wrapper.getImageMemoryRequirements(vk_dev.handle, vk_image);
+
+            const instance = state.vulkan.graphics_context.instance;
+            const pdev = state.vulkan.graphics_context.pdev;
+            const mem_type = mem_type: {
+                const pdev_mem_reqs = instance.wrapper.getPhysicalDeviceMemoryProperties(pdev);
+                var idx: u32 = 0;
+                while (idx < pdev_mem_reqs.memory_type_count) : (idx += 1) {
+                    const mem_type_flags = pdev_mem_reqs.memory_typess[idx].property_flags;
+                    if (mem_reqs.memory_type_bits & (1 << idx) and (mem_type_flags.host_coherent_bit and mem_type_flags.host_visible_bit)) {
+                        break :mem_type mem_reqs.memory_type_bits[idx];
+                    }
+                }
+
+                break :mem_type .{
+                    .property_flags = .{},
+                    .heap_index = 0,
+                };
+            };
+
+            const export_mem = vk_dev.wrapper.allocateMemory(vk_dev.handle, &.{
+                .p_next = &.{
+                    .handle_types = .{ .dma_buf_bit_ext = true },
+                },
+                .allocation_size = mem_reqs.size,
+                .memory_type_index = mem_type.heap_index,
+            }, null);
+
+            try vk_dev.bindImageMemory(vk_dev.handle, vk_image, export_mem, 0);
+
+            const fd = vk_dev.getMemoryFdKHR(vk_dev.handle, &.{
+                .memory = export_mem,
+                .handle_type = .{ .dma_buf_bit_ext = true },
+            });
+            _ = fd;
         }
-        ev_thread.join();
     } catch |err| { // program err exit path
         app_log.err("Program exiting due to error: {s}", .{@errorName(err)});
         std.process.exit(1);
@@ -264,6 +340,7 @@ const State = struct {
         xdg_surface: xdg.Surface,
         xdg_toplevel: xdg.Toplevel,
         decoration_toplevel: xdgd.ToplevelDecorationV1,
+        xdg_surface_acked: bool = false,
     };
     const Vulkan = struct {
         graphics_context: GraphicsContext,
@@ -272,7 +349,6 @@ const State = struct {
     wayland: Wayland,
     vulkan: Vulkan,
     running: bool,
-    xdg_surface_acked: bool = false,
 
     pub fn deinit(state: *State) void {
         // Wayland Deinit
@@ -401,6 +477,7 @@ fn log_display_err(err: wl.Display.Event.Error) void {
         err.message,
     });
 }
+
 fn join(arena: *Arena, left: []const u8, right: []const u8, sep: []const u8) []const u8 {
     const len = left.len + right.len + sep.len;
     const out_buf = arena.push(u8, len);
