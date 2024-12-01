@@ -2,4 +2,5 @@
 /zig-out/
 /build/
 
+nocheckin*
 *.log
