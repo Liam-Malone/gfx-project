@@ -108,13 +108,42 @@ pub const LinuxBufferParamsV1 = struct {
         /// invalid wl_buffer resulted from importing dmabufs via the create_immed request on given buffer_params
         invalid_wl_buffer = 7,
     };
-    pub const Flags = enum(u32) {
+    pub const Flags = packed struct(u32) {
         /// contents are y-inverted
-        y_invert = 1,
+        y_invert: bool = false,
         /// content is interlaced
-        interlaced = 2,
+        interlaced: bool = false,
         /// bottom field first
-        bottom_first = 4,
+        bottom_first: bool = false,
+        __reserved_bit_3: bool = false,
+        __reserved_bit_4: bool = false,
+        __reserved_bit_5: bool = false,
+        __reserved_bit_6: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     pub const destroy_params = struct {
         pub const op = 0;
@@ -213,9 +242,40 @@ pub const LinuxBufferParamsV1 = struct {
 pub const LinuxDmabufFeedbackV1 = struct {
     id: u32,
     version: u32 = 5,
-    pub const TrancheFlags = enum(u32) {
+    pub const TrancheFlags = packed struct(u32) {
         /// direct scan-out tranche
-        scanout = 1,
+        scanout: bool = false,
+        __reserved_bit_1: bool = false,
+        __reserved_bit_2: bool = false,
+        __reserved_bit_3: bool = false,
+        __reserved_bit_4: bool = false,
+        __reserved_bit_5: bool = false,
+        __reserved_bit_6: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     pub const destroy_params = struct {
         pub const op = 0;
@@ -264,7 +324,7 @@ pub const LinuxDmabufFeedbackV1 = struct {
 
         /// tranche flags
         pub const TrancheFlags = struct {
-            flags: u32,
+            flags: LinuxDmabufFeedbackV1.TrancheFlags,
         };
         pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
