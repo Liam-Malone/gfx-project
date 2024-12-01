@@ -46,8 +46,8 @@ pub const InitParams = struct {
 
     pub const large_pages: @This() = .{
         .flags = .largepage,
-        .reserve_size = mem.page_size,
-        .commit_size = mem.page_size,
+        .reserve_size = to_unit(2, .megabytes),
+        .commit_size = to_unit(2, .megabytes),
         .backing_buffer = null,
     };
 };
@@ -309,7 +309,7 @@ fn mem_reserve_large(size: usize) ?[]align(mem.page_size) u8 {
         -1,
         0,
     ) catch |err| ptr: {
-        std.log.err("Memory reserve error :: {s}", .{@errorName(err)});
+        std.log.err("Lage page ({d} Bytes) reserve error :: {s}", .{ size, @errorName(err) });
         break :ptr null;
     };
 
