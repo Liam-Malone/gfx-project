@@ -95,6 +95,18 @@ pub fn build(b: *std.Build) !void {
         exe.linkSystemLibrary("vulkan");
     }
 
+    const vert_cmd = b.addSystemCommand(&.{
+        "glslc",
+        "--target-env=vulkan1.2",
+        "-o",
+    });
+
+    const vert_spv = vert_cmd.addOutputFileArg("vert.spv");
+    vert_cmd.addFileArg(b.path("shaders/dummy.vert"));
+    exe.root_module.addAnonymousImport("vertex_shader", .{
+        .root_source_file = vert_spv,
+    });
+
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| {

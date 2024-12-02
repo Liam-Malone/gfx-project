@@ -11,6 +11,7 @@ const wl_log = std.log.scoped(.wayland);
 const Header = wl_msg.Header;
 
 const vk = @import("vulkan");
+const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*;
 
 const Arena = @import("Arena.zig");
 const GraphicsContext = @import("GraphicsContext.zig");
@@ -199,6 +200,7 @@ pub fn main() !void {
 
                     .sock_writer = sock_writer,
                     .wl_surface = wl_surface,
+                    .wl_buffer = undefined,
                     .xdg_surface = xdg_surface,
                     .xdg_toplevel = xdg_toplevel,
                     .decoration_toplevel = decoration_toplevel,
@@ -206,17 +208,320 @@ pub fn main() !void {
             };
 
             // Create Vulkan Graphics Context
+            app_log.debug("Initializing Vulkan Device", .{});
             const graphics_context = graphics_context: {
-                break :graphics_context GraphicsContext.init(arena.allocator(), "Simp Window", .{ .width = 400, .height = 400 }, false);
+                break :graphics_context GraphicsContext.init(arena.allocator(), "Simp Window", .{ .width = 800, .height = 600 }, false);
             } catch |err| {
                 app_log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
                 break :exit error.InitializationFailed;
             };
+            const vk_dev = graphics_context.dev;
 
+            app_log.debug("Creating Vulkan Image", .{});
+            const vk_image = vk_dev.wrapper.createImage(vk_dev.handle, &.{
+                .flags = .{ .@"2d_view_compatible_bit_ext" = true },
+                .image_type = .@"2d",
+                .extent = .{
+                    .width = 800,
+                    .height = 600,
+                    .depth = 1,
+                },
+                .mip_levels = 1,
+                .array_layers = 1,
+                .format = .r8g8b8a8_unorm,
+                .tiling = .optimal,
+                .initial_layout = .general,
+                .usage = .{
+                    .transfer_src_bit = true,
+                    .color_attachment_bit = true,
+                },
+                .samples = .{ .@"1_bit" = true },
+                .sharing_mode = .exclusive,
+            }, null) catch |err| {
+                app_log.err("Failed to create VkImage with error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+
+            app_log.debug("Creating Vulkan Image View", .{});
+            const vk_image_view = vk_dev.wrapper.createImageView(vk_dev.handle, &.{
+                .view_type = .@"2d",
+                .image = vk_image,
+                .format = .r8g8b8a8_unorm,
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+                .components = .{
+                    .r = .r,
+                    .g = .g,
+                    .b = .b,
+                    .a = .a,
+                },
+            }, null) catch |err| {
+                app_log.err("Failed to create VkImageView with error: {s}", .{@errorName(err)});
+                break :exit err;
+            };
+            app_log.debug("Created Vulkan Image View", .{});
+
+            app_log.debug("Getting Vulkan Image Memory Requirements", .{});
+            const mem_reqs = vk_dev.wrapper.getImageMemoryRequirements(vk_dev.handle, vk_image);
+            app_log.debug("Got Vulkan Image Memory Requirements", .{});
+
+            const instance = graphics_context.instance;
+            const pdev = graphics_context.pdev;
+
+            app_log.debug("Obtaining Vulkan Memory Type", .{});
+            const mem_type: vk.MemoryType = mem_type: {
+                const pdev_mem_reqs = instance.wrapper.getPhysicalDeviceMemoryProperties(pdev);
+                var idx: u32 = 0;
+                while (idx < pdev_mem_reqs.memory_type_count) : (idx += 1) {
+                    const mem_type_flags = pdev_mem_reqs.memory_types[idx].property_flags;
+                    if (mem_reqs.memory_type_bits & (@as(u6, 1) << @as(u3, @intCast(idx))) != 0 and (mem_type_flags.host_coherent_bit and mem_type_flags.host_visible_bit)) {
+                        break :mem_type pdev_mem_reqs.memory_types[idx];
+                    }
+                }
+
+                break :mem_type .{
+                    .property_flags = .{},
+                    .heap_index = 0,
+                };
+            };
+
+            app_log.debug("Allocating DMA Buf", .{});
+            const export_mem = try vk_dev.wrapper.allocateMemory(vk_dev.handle, &.{
+                .p_next = &vk.ExportMemoryAllocateInfo{
+                    .handle_types = .{
+                        .dma_buf_bit_ext = true,
+                        .host_allocation_bit_ext = true,
+                    },
+                },
+                .allocation_size = mem_reqs.size,
+                .memory_type_index = mem_type.heap_index,
+            }, null);
+
+            app_log.debug("Binding Image Memory", .{});
+            try vk_dev.wrapper.bindImageMemory(vk_dev.handle, vk_image, export_mem, 0);
+
+            app_log.debug("Obtaining Memory File Descriptor", .{});
+            const vk_fd = try vk_dev.wrapper.getMemoryFdKHR(vk_dev.handle, &.{
+                .memory = export_mem,
+                .handle_type = .{ .dma_buf_bit_ext = true },
+            });
+
+            app_log.debug("Creating Command Pool", .{});
+            const cmd_pool = try vk_dev.wrapper.createCommandPool(vk_dev.handle, &.{
+                .queue_family_index = graphics_context.graphics_queue.family,
+                .flags = .{ .reset_command_buffer_bit = true },
+            }, null);
+
+            const image_count = 2;
+            app_log.debug("Allocating Command Buffers", .{});
+            const cmd_bufs = arena.push(vk.CommandBuffer, image_count);
+            try vk_dev.wrapper.allocateCommandBuffers(vk_dev.handle, &.{
+                .command_pool = cmd_pool,
+                .level = .primary,
+                .command_buffer_count = @intCast(cmd_bufs.len),
+            }, @ptrCast(cmd_bufs));
+
+            app_log.debug("Creating Render Pass", .{});
+            const render_pass = try vk_dev.wrapper.createRenderPass(vk_dev.handle, &.{
+                .attachment_count = 1,
+                .p_attachments = &[_]vk.AttachmentDescription{
+                    .{
+                        .format = .r8g8b8a8_unorm,
+                        .samples = .{ .@"1_bit" = true },
+                        .load_op = .clear,
+                        .store_op = .store,
+                        .stencil_load_op = .dont_care,
+                        .stencil_store_op = .dont_care,
+                        .initial_layout = .undefined,
+                        .final_layout = .transfer_src_optimal,
+                    },
+                },
+                .subpass_count = 1,
+                .p_subpasses = &[_]vk.SubpassDescription{
+                    .{
+                        .pipeline_bind_point = .graphics,
+                        .color_attachment_count = 1,
+                        .p_color_attachments = &[_]vk.AttachmentReference{
+                            .{
+                                .attachment = 0,
+                                .layout = .color_attachment_optimal,
+                            },
+                        },
+                    },
+                },
+            }, null);
+
+            const vert = try vk_dev.createShaderModule(&.{
+                .code_size = vert_spv.len,
+                .p_code = @ptrCast(&vert_spv),
+            }, null);
+            defer vk_dev.destroyShaderModule(vert, null);
+
+            const pipeline_layout = try vk_dev.wrapper.createPipelineLayout(vk_dev.handle, &.{}, null);
+            const pipelines = arena.push(vk.Pipeline, 1);
+
+            app_log.debug("Creating Graphics Pipelines", .{});
+            const pipeline = try vk_dev.wrapper.createGraphicsPipelines(vk_dev.handle, .null_handle, 1, &[_]vk.GraphicsPipelineCreateInfo{
+                .{
+                    .stage_count = 1,
+                    .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
+                        .{
+                            .stage = .{ .vertex_bit = true },
+                            .module = vert,
+                            .p_name = "main",
+                        },
+                    },
+                    .p_vertex_input_state = &.{
+                        .vertex_binding_description_count = 0,
+                        .vertex_attribute_description_count = 0,
+                    },
+                    .p_input_assembly_state = &.{
+                        .topology = .triangle_list,
+                        .primitive_restart_enable = 0,
+                    },
+                    .p_viewport_state = &.{
+                        .viewport_count = 1,
+                        .p_viewports = &[_]vk.Viewport{
+                            .{
+                                .x = 0,
+                                .y = 0,
+                                .width = 800,
+                                .height = 600,
+                                .min_depth = 0,
+                                .max_depth = 1,
+                            },
+                        },
+                        .scissor_count = 1,
+                        .p_scissors = &[_]vk.Rect2D{
+                            .{
+                                .offset = .{ .x = 0, .y = 0 },
+                                .extent = .{ .width = 800, .height = 600 },
+                            },
+                        },
+                    },
+                    .p_rasterization_state = &.{
+                        .depth_clamp_enable = vk.FALSE,
+                        .rasterizer_discard_enable = vk.FALSE,
+                        .polygon_mode = .fill,
+                        .front_face = .clockwise,
+                        .cull_mode = .{},
+                        .depth_bias_enable = vk.FALSE,
+                        .depth_bias_constant_factor = 1,
+                        .depth_bias_clamp = 1,
+                        .depth_bias_slope_factor = 0,
+                        .line_width = 1,
+                    },
+                    .p_multisample_state = &.{
+                        .rasterization_samples = .{ .@"1_bit" = true },
+                        .sample_shading_enable = 0,
+                        .min_sample_shading = 0,
+                        .alpha_to_coverage_enable = 0,
+                        .alpha_to_one_enable = 0,
+                    },
+                    .p_color_blend_state = &.{
+                        .logic_op_enable = 0,
+                        .logic_op = .clear,
+                        .attachment_count = 1,
+                        .p_attachments = &[_]vk.PipelineColorBlendAttachmentState{
+                            .{
+                                .blend_enable = 0,
+                                .src_color_blend_factor = .src_color,
+                                .dst_color_blend_factor = .src_color,
+                                .color_blend_op = .add,
+                                .src_alpha_blend_factor = .src_color,
+                                .dst_alpha_blend_factor = .src_color,
+                                .alpha_blend_op = .add,
+                                .color_write_mask = .{
+                                    .r_bit = true,
+                                    .g_bit = true,
+                                    .b_bit = true,
+                                    .a_bit = true,
+                                },
+                            },
+                        },
+                        .blend_constants = [_]f32{ 0, 0, 0, 0 },
+                    },
+                    .render_pass = render_pass,
+                    .subpass = 0,
+                    .base_pipeline_index = 0,
+                },
+            }, null, pipelines.ptr);
+            app_log.debug("pipeline: {s}", .{@tagName(pipeline)});
+
+            app_log.debug("Allocating Framebuffers", .{});
+            const framebuffers = arena.push(vk.Framebuffer, image_count);
+            app_log.debug("Creating Framebuffers", .{});
+            for (framebuffers) |*framebuffer| {
+                framebuffer.* = try vk_dev.wrapper.createFramebuffer(vk_dev.handle, &.{
+                    .render_pass = render_pass,
+                    .attachment_count = 1,
+                    .p_attachments = &[_]vk.ImageView{vk_image_view},
+                    .width = 800,
+                    .height = 600,
+                    .layers = 1,
+                }, null);
+            }
+
+            app_log.debug("Initial Command Buffer Invokations", .{});
+            for (cmd_bufs) |cmd_buf| {
+                try vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
+                    .flags = .{ .one_time_submit_bit = true },
+                });
+
+                const clear_value = [_]vk.ClearValue{.{
+                    .color = .{
+                        .float_32 = [_]f32{ 1.0, 1.0, 1.0, 1.0 }, // white
+                    },
+                }};
+
+                vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
+                    .render_pass = render_pass,
+                    .framebuffer = framebuffers[0],
+                    .render_area = .{
+                        .offset = .{ .x = 0, .y = 0 },
+                        .extent = .{ .width = 800, .height = 600 },
+                    },
+                    .clear_value_count = 1,
+                    .p_clear_values = &clear_value,
+                }, .@"inline");
+
+                vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
+                try vk_dev.wrapper.endCommandBuffer(cmd_buf);
+            }
+
+            app_log.debug("Initial Queue Submission", .{});
+            try vk_dev.wrapper.queueSubmit(graphics_context.graphics_queue.handle, 1, &[_]vk.SubmitInfo{
+                .{
+                    .command_buffer_count = 1,
+                    .p_command_buffers = cmd_bufs.ptr,
+                },
+            }, .null_handle);
+
+            app_log.debug("Initial Queue Wait", .{});
+            try vk_dev.wrapper.queueWaitIdle(graphics_context.graphics_queue.handle);
+
+            app_log.debug("Returning Constructed Program State", .{});
+            // Return constructed state
             break :state .{
                 .wayland = wl_state,
                 .vulkan = .{
                     .graphics_context = graphics_context,
+                    .image = vk_image,
+                    .image_view = vk_image_view,
+                    .image_count = image_count,
+                    .export_mem = export_mem,
+                    .render_pass = render_pass,
+                    .mem_fd = vk_fd,
+                    .cmd_pool = cmd_pool,
+                    .cmd_bufs = cmd_bufs,
+                    .pipeline_layout = pipeline_layout,
+                    .pipelines = pipelines,
+                    .framebuffers = framebuffers,
                 },
                 .running = true,
             };
@@ -235,85 +540,84 @@ pub fn main() !void {
             // Wait for initial xdg_surface config ack
         }
 
-        while (state.running) {
+        app_log.debug("Committing Surface", .{});
+        try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
+        app_log.debug("Registering LinuxDMAbuf Params", .{});
+        const dmabuf_params = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
+        app_log.debug("Creating LinuxDMAbuf Params", .{});
+        try state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
+            .params_id = dmabuf_params.id,
+        });
+
+        app_log.debug("Adding File Descriptor to LinuxDMAbuf Params", .{});
+        try dmabuf_params.add(state.wayland.sock_writer, .{
+            .fd = @intCast(state.vulkan.mem_fd),
+            .plane_idx = 0,
+            .offset = 0,
+            .stride = 600 * 4,
+            .modifier_hi = 0,
+            .modifier_lo = 0,
+        });
+
+        app_log.debug("Registering wl_buffer", .{});
+        const wl_buffer = try state.wayland.interface_registry.register(wl.Buffer);
+        app_log.debug("Trying dmabuf_params::create_immed", .{});
+        try dmabuf_params.create_immed(state.wayland.sock_writer, .{
+            .buffer_id = wl_buffer.id,
+            .width = 800,
+            .height = 600,
+            .format = 0,
+            .flags = .{},
+        });
+
+        state.wayland.wl_buffer = wl_buffer;
+
+        app_log.debug("Attaching Surface to Buffer", .{});
+        try state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
+            .buffer = wl_buffer.id,
+            .x = 0,
+            .y = 0,
+        });
+
+        app_log.debug("Committing Surface", .{});
+        try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
+
+        var cur_frame_idx: usize = 0;
+        while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.vulkan.image_count) {
             // Do stuff
+            const clear_value = [_]vk.ClearValue{
+                .{
+                    .color = .{ .float_32 = [_]f32{ 1.0, 1.0, 1.0, 1.0 } }, // White color
+                },
+            };
+
             const vk_dev = state.vulkan.graphics_context.dev;
-            const vk_image = vk_dev.wrapper.createImage(vk_dev.handle, &.{
-                .image_type = .@"2d",
-                .extent = .{
-                    .width = 600,
-                    .height = 600,
-                    .depth = 1,
-                },
-                .mip_levels = 1,
-                .array_layers = 1,
-                .format = .r8g8b8a8_unorm,
-                .tiling = .optimal,
-                .initial_layout = .undefined,
-                .usage = .{
-                    .transfer_src_bit = true,
-                    .color_attachment_bit = true,
-                },
-                .samples = .{ .@"1_bit" = true },
-                .sharing_mode = .exclusive,
-            }, null) catch |err| {
-                app_log.err("Failed to create VkImage with error: {s}", .{@errorName(err)});
-                break :exit err;
-            };
+            const cmd_buf = state.vulkan.cmd_bufs[cur_frame_idx];
+            const graphics_queue = state.vulkan.graphics_context.graphics_queue;
 
-            const vk_image_view = vk_dev.wrapper.createImageView(vk_dev.handle, &.{
-                .image = vk_image,
-                .view_type = .@"2d",
-                .format = .r8g8b8a8_unorm,
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-                .components = undefined,
-            }, null) catch |err| {
-                app_log.err("Failed to create VkImageView with error: {s}", .{@errorName(err)});
-                break :exit err;
-            };
-            _ = vk_image_view;
-
-            const mem_reqs = vk_dev.wrapper.getImageMemoryRequirements(vk_dev.handle, vk_image);
-
-            const instance = state.vulkan.graphics_context.instance;
-            const pdev = state.vulkan.graphics_context.pdev;
-            const mem_type = mem_type: {
-                const pdev_mem_reqs = instance.wrapper.getPhysicalDeviceMemoryProperties(pdev);
-                var idx: u32 = 0;
-                while (idx < pdev_mem_reqs.memory_type_count) : (idx += 1) {
-                    const mem_type_flags = pdev_mem_reqs.memory_typess[idx].property_flags;
-                    if (mem_reqs.memory_type_bits & (1 << idx) and (mem_type_flags.host_coherent_bit and mem_type_flags.host_visible_bit)) {
-                        break :mem_type mem_reqs.memory_type_bits[idx];
-                    }
-                }
-
-                break :mem_type .{
-                    .property_flags = .{},
-                    .heap_index = 0,
-                };
-            };
-
-            const export_mem = vk_dev.wrapper.allocateMemory(vk_dev.handle, &.{
-                .p_next = &.{
-                    .handle_types = .{ .dma_buf_bit_ext = true },
-                },
-                .allocation_size = mem_reqs.size,
-                .memory_type_index = mem_type.heap_index,
-            }, null);
-
-            try vk_dev.bindImageMemory(vk_dev.handle, vk_image, export_mem, 0);
-
-            const fd = vk_dev.getMemoryFdKHR(vk_dev.handle, &.{
-                .memory = export_mem,
-                .handle_type = .{ .dma_buf_bit_ext = true },
+            try vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
+                .flags = .{ .one_time_submit_bit = true },
             });
-            _ = fd;
+
+            vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
+                .render_pass = state.vulkan.render_pass,
+                .framebuffer = state.vulkan.framebuffers[cur_frame_idx],
+                .render_area = .{
+                    .offset = .{ .x = 0, .y = 0 },
+                    .extent = .{ .width = 800, .height = 600 },
+                },
+                .clear_value_count = 1,
+                .p_clear_values = &clear_value,
+            }, .@"inline");
+
+            vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
+            try vk_dev.wrapper.endCommandBuffer(cmd_buf);
+            try vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
+                .{
+                    .command_buffer_count = 1,
+                    .p_command_buffers = state.vulkan.cmd_bufs.ptr,
+                },
+            }, .null_handle);
         }
     } catch |err| { // program err exit path
         app_log.err("Program exiting due to error: {s}", .{@errorName(err)});
@@ -337,6 +641,7 @@ const State = struct {
 
         sock_writer: std.net.Stream.Writer,
         wl_surface: wl.Surface,
+        wl_buffer: wl.Buffer,
         xdg_surface: xdg.Surface,
         xdg_toplevel: xdg.Toplevel,
         decoration_toplevel: xdgd.ToplevelDecorationV1,
@@ -344,6 +649,17 @@ const State = struct {
     };
     const Vulkan = struct {
         graphics_context: GraphicsContext,
+        image: vk.Image,
+        image_view: vk.ImageView,
+        image_count: usize,
+        export_mem: vk.DeviceMemory,
+        mem_fd: c_int,
+        cmd_pool: vk.CommandPool,
+        cmd_bufs: []vk.CommandBuffer,
+        render_pass: vk.RenderPass,
+        pipeline_layout: vk.PipelineLayout,
+        pipelines: []vk.Pipeline,
+        framebuffers: []vk.Framebuffer,
     };
 
     wayland: Wayland,
@@ -430,7 +746,8 @@ fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
                     switch (action) {
                         .configure => |configure| {
                             try wl_state.xdg_surface.ack_configure(wl_state.sock_writer, .{ .serial = configure.serial });
-                            wl_state.xdg_surface_acked = true;
+                            if (!state.wayland.xdg_surface_acked) state.wayland.xdg_surface_acked = true;
+                            app_log.info("Acked configure for xdg_surface", .{});
                         },
                     };
             },
@@ -496,6 +813,7 @@ const InterfaceType = enum {
     compositor,
     wl_seat,
     wl_surface,
+    wl_buffer,
     wl_callback,
     xdg_wm_base,
     xdg_surface,
@@ -513,6 +831,7 @@ const InterfaceType = enum {
             wl.Registry => .registry,
             wl.Compositor => .compositor,
             wl.Surface => .wl_surface,
+            wl.Buffer => .wl_buffer,
             wl.Callback => .wl_callback,
 
             xdg.WmBase => .xdg_wm_base,
@@ -623,6 +942,9 @@ fn log_unused_event(interface: InterfaceType, event: Event) !void {
         },
         .wl_surface => {
             app_log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(event.header.op, event.data)});
+        },
+        .wl_buffer => {
+            app_log.debug("Unused event: {any}", .{try wl.Buffer.Event.parse(event.header.op, event.data)});
         },
         .compositor => unreachable, // wl_compositor has no events
         .wl_callback => {
