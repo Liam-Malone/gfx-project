@@ -12,6 +12,19 @@ const Header = wl_msg.Header;
 
 const vk = @import("vulkan");
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*;
+const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
+
+const Drm = struct {
+    const Format = enum(u32) {
+        rgba8888 = fourcc_code([4]u8{ 'R', 'A', '2', '4' }),
+        _,
+    };
+    fn fourcc_code(comptime buf: [4]u8) u32 {
+        return std.mem.bytesToValue(u32, buf[0..4]);
+    }
+};
+//const DRM_FORMAT_RGBA8888 = Drm.fourcc_code([4]u8{ 'R', 'A', '2', '4' });
+const DRM_FORMAT_RGBA8888: Drm.Format = .rgba8888;
 
 const Arena = @import("Arena.zig");
 const GraphicsContext = @import("GraphicsContext.zig");
@@ -184,8 +197,10 @@ pub fn main() !void {
                 const xdg_toplevel = try interface_registry.register(xdg.Toplevel);
                 try xdg_surface.get_toplevel(sock_writer, .{ .id = xdg_toplevel.id });
 
-                try wl_surface.commit(sock_writer, .{});
+                try xdg_toplevel.set_app_id(sock_writer, .{ .app_id = "simp-client" });
+                try xdg_toplevel.set_title(sock_writer, .{ .title = "Simp Client" });
 
+                try wl_surface.commit(sock_writer, .{});
                 const decoration_toplevel = try interface_registry.register(xdgd.ToplevelDecorationV1);
                 try xdg_decoration_manager.get_toplevel_decoration(sock_writer, .{ .id = decoration_toplevel.id, .toplevel = xdg_toplevel.id });
                 break :wl_state .{
@@ -362,17 +377,28 @@ pub fn main() !void {
             }, null);
             defer vk_dev.destroyShaderModule(vert, null);
 
+            const frag = try vk_dev.createShaderModule(&.{
+                .code_size = frag_spv.len,
+                .p_code = @ptrCast(&frag_spv),
+            }, null);
+            defer vk_dev.destroyShaderModule(frag, null);
+
             const pipeline_layout = try vk_dev.wrapper.createPipelineLayout(vk_dev.handle, &.{}, null);
             const pipelines = arena.push(vk.Pipeline, 1);
 
             app_log.debug("Creating Graphics Pipelines", .{});
             const pipeline = try vk_dev.wrapper.createGraphicsPipelines(vk_dev.handle, .null_handle, 1, &[_]vk.GraphicsPipelineCreateInfo{
                 .{
-                    .stage_count = 1,
+                    .stage_count = 2,
                     .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
                         .{
                             .stage = .{ .vertex_bit = true },
                             .module = vert,
+                            .p_name = "main",
+                        },
+                        .{
+                            .stage = .{ .fragment_bit = true },
+                            .module = frag,
                             .p_name = "main",
                         },
                     },
@@ -535,22 +561,21 @@ pub fn main() !void {
         };
         defer ev_thread.join();
 
-        // main loop
         while (!state.wayland.xdg_surface_acked) {
             // Wait for initial xdg_surface config ack
         }
 
-        app_log.debug("Committing Surface", .{});
-        try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
+        // app_log.debug("Committing Surface", .{});
+        // try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
         app_log.debug("Registering LinuxDMAbuf Params", .{});
-        const dmabuf_params = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
+        const dmabuf_params_a = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
         app_log.debug("Creating LinuxDMAbuf Params", .{});
         try state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
-            .params_id = dmabuf_params.id,
+            .params_id = dmabuf_params_a.id,
         });
 
         app_log.debug("Adding File Descriptor to LinuxDMAbuf Params", .{});
-        try dmabuf_params.add(state.wayland.sock_writer, .{
+        try dmabuf_params_a.add(state.wayland.sock_writer, .{
             .fd = @intCast(state.vulkan.mem_fd),
             .plane_idx = 0,
             .offset = 0,
@@ -559,22 +584,53 @@ pub fn main() !void {
             .modifier_lo = 0,
         });
 
-        app_log.debug("Registering wl_buffer", .{});
-        const wl_buffer = try state.wayland.interface_registry.register(wl.Buffer);
+        app_log.debug("Registering First wl_buffer", .{});
+        const wl_buffer_a = try state.wayland.interface_registry.register(wl.Buffer);
         app_log.debug("Trying dmabuf_params::create_immed", .{});
-        try dmabuf_params.create_immed(state.wayland.sock_writer, .{
-            .buffer_id = wl_buffer.id,
+        try dmabuf_params_a.create_immed(state.wayland.sock_writer, .{
+            .buffer_id = wl_buffer_a.id,
             .width = 800,
             .height = 600,
-            .format = 0,
+            .format = @intFromEnum(DRM_FORMAT_RGBA8888),
             .flags = .{},
         });
+        state.wayland.wl_buffer[0] = wl_buffer_a;
 
-        state.wayland.wl_buffer = wl_buffer;
+        app_log.debug("Registering LinuxDMAbuf Params", .{});
+        const dmabuf_params_b = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
+        app_log.debug("Creating LinuxDMAbuf Params", .{});
+        try state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
+            .params_id = dmabuf_params_b.id,
+        });
+
+        app_log.debug("Adding File Descriptor to LinuxDMAbuf Params", .{});
+        try dmabuf_params_b.add(state.wayland.sock_writer, .{
+            .fd = @intCast(state.vulkan.mem_fd),
+            .plane_idx = 0,
+            .offset = 1,
+            .stride = 600 * 4,
+            .modifier_hi = 0,
+            .modifier_lo = 0,
+        });
+
+        app_log.debug("Registering Second wl_buffer", .{});
+        const wl_buffer_b = try state.wayland.interface_registry.register(wl.Buffer);
+        app_log.debug("Trying dmabuf_params::create_immed", .{});
+        try dmabuf_params_b.create_immed(state.wayland.sock_writer, .{
+            .buffer_id = wl_buffer_b.id,
+            .width = 800,
+            .height = 600,
+            .format = @intFromEnum(DRM_FORMAT_RGBA8888),
+            .flags = .{},
+        });
+        state.wayland.wl_buffer[1] = wl_buffer_b;
+
+        app_log.debug("Committing Surface", .{});
+        try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
 
         app_log.debug("Attaching Surface to Buffer", .{});
         try state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
-            .buffer = wl_buffer.id,
+            .buffer = wl_buffer_a.id,
             .x = 0,
             .y = 0,
         });
@@ -618,6 +674,16 @@ pub fn main() !void {
                     .p_command_buffers = state.vulkan.cmd_bufs.ptr,
                 },
             }, .null_handle);
+
+            app_log.debug("Attaching Surface to Buffer", .{});
+            try state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
+                .buffer = state.wayland.wl_buffer[cur_frame_idx].id,
+                .x = 0,
+                .y = 0,
+            });
+
+            app_log.debug("Committing Surface", .{});
+            try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
         }
     } catch |err| { // program err exit path
         app_log.err("Program exiting due to error: {s}", .{@errorName(err)});
@@ -641,7 +707,7 @@ const State = struct {
 
         sock_writer: std.net.Stream.Writer,
         wl_surface: wl.Surface,
-        wl_buffer: wl.Buffer,
+        wl_buffer: [2]wl.Buffer,
         xdg_surface: xdg.Surface,
         xdg_toplevel: xdg.Toplevel,
         decoration_toplevel: xdgd.ToplevelDecorationV1,
@@ -710,7 +776,7 @@ const State = struct {
 };
 
 fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
-    var wl_state = state.wayland;
+    var wl_state = &state.wayland;
     while (true) {
         const ev = event_iterator.next() catch |err| blk: {
             switch (err) {
@@ -724,7 +790,7 @@ fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
             }
             break :blk Event.nil;
         } orelse Event.nil;
-        const interface = wl_state.interface_registry.get(ev.header.id) orelse .nil_ev;
+        const interface = state.wayland.interface_registry.get(ev.header.id) orelse .nil_ev;
         switch (interface) {
             .nil_ev => {
                 // nil event handle
@@ -899,6 +965,8 @@ const InterfaceRegistry = struct {
 
     pub fn register(self: *InterfaceRegistry, comptime T: type) !T {
         defer self.idx += 1;
+
+        app_log.info("Registering Interface: {s}, with id: {d}", .{ @typeName(T), self.idx });
 
         try self.elems.put(self.idx, try .from_type(T));
         return .{
