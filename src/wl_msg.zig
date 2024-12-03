@@ -120,7 +120,6 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
 
     if (@hasField(T, "fd")) {
         const msg_len = @sizeOf(T) - @sizeOf(FileDescriptor);
-        std.log.debug("msg_len: {d}", .{msg_len});
         var msg: [msg_len]u8 = undefined;
         var idx: usize = 0;
         var fd: FileDescriptor = undefined;
@@ -130,7 +129,6 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
                 fd = @intCast(val);
             } else {
                 const field_as_bytes = std.mem.asBytes(&val);
-                std.log.debug("length of {s} :: {d}", .{ field.name, field_as_bytes.len });
                 @memcpy(msg[idx .. idx + field_as_bytes.len], field_as_bytes);
                 idx += field_as_bytes.len;
             }
@@ -180,7 +178,6 @@ fn write_arr(writer: anytype, arr: []const u8) !void {
 }
 
 fn write_str(writer: anytype, str: [:0]const u8) !void {
-    std.debug.print("writing: {s}\n", .{str});
     try write_arr(writer, @ptrCast(str[0 .. str.len + 1]));
 }
 
