@@ -547,21 +547,6 @@ pub fn main() !void {
             };
         };
 
-        const feedback = try state.wayland.interface_registry.register(dmab.LinuxDmabufFeedbackV1);
-        try state.wayland.dmabuf.get_default_feedback(state.wayland.sock_writer, .{ .id = feedback.id });
-
-        const fnctl = std.posix.fcntl(state.vulkan.mem_fd, std.posix.F.GETFL, 0) catch |err| {
-            std.debug.print("invalid fd from vulkan?? Error :: {s}\n", .{@errorName(err)});
-            break :exit err;
-        };
-        std.debug.print("fnctl :: {d}\n", .{fnctl});
-
-        const stat = std.posix.fstat(state.vulkan.mem_fd) catch |err| {
-            std.debug.print("Failed to state Vulkan fd :: {s}\n", .{@errorName(err)});
-            break :exit err;
-        };
-        std.debug.print("VkFd size: {d}\n", .{stat.size});
-
         const dmabuf_params_a = state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1) catch |err| break :exit err;
         state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
             .params_id = dmabuf_params_a.id,
@@ -577,13 +562,6 @@ pub fn main() !void {
         }) catch |err| break :exit err;
 
         const wl_buffer_a = state.wayland.interface_registry.register(wl.Buffer) catch |err| break :exit err;
-        std.debug.print("::Creating DMA Buf::\nbuf id: {d}\nvk_fd: {d}\nwidth: {d}\nheight: {d}\nstride: {d}\n", .{
-            wl_buffer_a.id,
-            state.vulkan.mem_fd,
-            state.width,
-            state.height,
-            @as(u32, @intCast(state.width * 4)),
-        });
         dmabuf_params_a.create_immed(state.wayland.sock_writer, .{
             .buffer_id = wl_buffer_a.id,
             .width = @intCast(state.width),
@@ -609,12 +587,13 @@ pub fn main() !void {
 
             const clear_value = [_]vk.ClearValue{
                 .{
-                    .color = .{ .float_32 = [_]f32{ 1.0, 1.0, 1.0, 1.0 } }, // White color
+                    .color = .{ .float_32 = [_]f32{ 0.1, 0.6, 0.3, 0.7 } },
                 },
             };
 
             const vk_dev = state.vulkan.graphics_context.dev;
             vk_dev.wrapper.queueWaitIdle(state.vulkan.graphics_context.graphics_queue.handle) catch |err| break :exit err;
+
             const cmd_buf = state.vulkan.cmd_bufs[cur_frame_idx];
             const graphics_queue = state.vulkan.graphics_context.graphics_queue;
 
@@ -635,19 +614,14 @@ pub fn main() !void {
 
             vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
             vk_dev.wrapper.endCommandBuffer(cmd_buf) catch |err| break :exit err;
-            vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
-                .{
-                    .command_buffer_count = 1,
-                    .p_command_buffers = state.vulkan.cmd_bufs.ptr,
-                },
-            }, .null_handle) catch |err| break :exit err;
 
-            // state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
-            //     .buffer = state.wayland.wl_buffer[cur_frame_idx].id,
-            //     .x = 0,
-            //     .y = 0,
-            // }) catch |err| break :exit err;
-            // state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
+            if (state.running)
+                vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
+                    .{
+                        .command_buffer_count = 1,
+                        .p_command_buffers = state.vulkan.cmd_bufs.ptr,
+                    },
+                }, .null_handle) catch |err| break :exit err;
         }
     } catch |err| { // program err exit path
         app_log.err("Program exiting due to error: {s}", .{@errorName(err)});
@@ -675,7 +649,7 @@ const State = struct {
         wl_surface: wl.Surface,
         wl_buffer: [2]wl.Buffer,
         xdg_surface: xdg.Surface,
-        xdg_toplevel: xdg.Toplevel,
+        xdg_toplevel: ?xdg.Toplevel,
         decoration_toplevel: xdgd.ToplevelDecorationV1,
         xdg_surface_acked: bool = false,
         socket_closed: bool = false,
@@ -707,19 +681,8 @@ const State = struct {
             const wl_state = &state.wayland;
             defer wl_state.interface_registry.deinit();
             if (!wl_state.socket_closed) {
+                defer wl_state.socket_closed = true;
                 defer wl_state.wl_socket.close();
-
-                wl_state.xdg_wm_base.destroy(wl_state.sock_writer, .{}) catch |err| {
-                    wl_log.err("Failed to send destroy message to xdg_wm_base:: Error: {s}", .{@errorName(err)});
-                };
-
-                wl_state.decoration_manager.destroy(wl_state.sock_writer, .{}) catch |err| {
-                    wl_log.err("Failed to send release message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
-                };
-
-                wl_state.wl_surface.destroy(wl_state.sock_writer, .{}) catch |err| {
-                    wl_log.err("Failed to send destroy message to wl_surface:: Error: {s}", .{@errorName(err)});
-                };
 
                 for (wl_state.wl_buffer, 0..) |buf, idx| {
                     buf.destroy(wl_state.sock_writer, .{}) catch |err| {
@@ -727,11 +690,7 @@ const State = struct {
                     };
                 }
 
-                wl_state.xdg_surface.destroy(wl_state.sock_writer, .{}) catch |err| {
-                    wl_log.err("Failed to send release message to xdg_surface:: Error: {s}", .{@errorName(err)});
-                };
-
-                wl_state.xdg_toplevel.destroy(wl_state.sock_writer, .{}) catch |err| {
+                if (wl_state.xdg_toplevel) |tl| tl.destroy(wl_state.sock_writer, .{}) catch |err| {
                     wl_log.err("Failed to send release message to xdg_toplevel:: Error: {s}", .{@errorName(err)});
                 };
 
@@ -740,7 +699,18 @@ const State = struct {
                 };
 
                 wl_state.decoration_manager.destroy(wl_state.sock_writer, .{}) catch |err| {
-                    wl_log.err("Failed to send destroy message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
+                    wl_log.err("Failed to send release message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
+                };
+                wl_state.xdg_surface.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send release message to xdg_surface:: Error: {s}", .{@errorName(err)});
+                };
+
+                wl_state.wl_surface.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send destroy message to wl_surface:: Error: {s}", .{@errorName(err)});
+                };
+
+                wl_state.xdg_wm_base.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send destroy message to xdg_wm_base:: Error: {s}", .{@errorName(err)});
                 };
 
                 wl_state.seat.release(wl_state.sock_writer, .{}) catch |err| {
@@ -827,7 +797,8 @@ fn handle_wl_events(state: *State) void {
                             },
                             .close => { //  Empty struct, nothing to capture
                                 app_log.info("server is closing this toplevel", .{});
-                                app_log.warn("toplevel close handling not yet fully implemented", .{});
+                                wl_state.xdg_toplevel.?.destroy(wl_state.sock_writer, .{}) catch |err| break :res err;
+                                wl_state.xdg_toplevel = null;
                                 state.running = false;
                                 break;
                             },
