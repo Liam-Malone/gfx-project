@@ -219,7 +219,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
             event_iter = interface.findChildrenByTag("event"); // reset
             try writer.print(
                 \\
-                \\        pub fn parse(op: u32, data: []const u8) !Event {{
+                \\        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {{
                 \\            return switch (op) {{
                 \\
             , .{});
@@ -228,7 +228,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
 
                 // const ev_name = if (std.mem.eql(u8, base_name, "error")) "err" else base_name;
                 try writer.print(
-                    \\                {d} => .{{ .@"{s}" = try wl_msg.parse_data(Event.@"{s}", data) }},
+                    \\                {d} => .{{ .@"{s}" = try wl_msg.parse_data(sock, Event.@"{s}", data) }},
                     \\
                 , .{ idx, ev_name, snakeToPascal(ev_name) });
             }

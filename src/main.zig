@@ -14,17 +14,7 @@ const vk = @import("vulkan");
 const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*;
 const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
 
-const Drm = struct {
-    const Format = enum(u32) {
-        rgba8888 = fourcc_code([4]u8{ 'R', 'A', '2', '4' }),
-        _,
-    };
-    fn fourcc_code(comptime buf: [4]u8) u32 {
-        return std.mem.bytesToValue(u32, buf[0..4]);
-    }
-};
-//const DRM_FORMAT_RGBA8888 = Drm.fourcc_code([4]u8{ 'R', 'A', '2', '4' });
-const DRM_FORMAT_RGBA8888: Drm.Format = .rgba8888;
+const Drm = @import("Drm.zig");
 
 const Arena = @import("Arena.zig");
 const GraphicsContext = @import("GraphicsContext.zig");
@@ -37,36 +27,33 @@ pub fn main() !void {
         var arena: *Arena = .init(.default);
         defer arena.release();
 
-        std.debug.print("sizeof(Arena) = {d}\n", .{@sizeOf(Arena)});
-        const socket: std.net.Stream = connect_display(arena) catch |err| {
-            app_log.err("Failed to connect to wayland socket with error: {s}\nExiting program now", .{@errorName(err)});
-            break :exit err;
-        };
-        defer socket.close();
-        const sock_writer = socket.writer();
-
-        const display: wl.Display = .{ .id = 1 };
-        const registry: wl.Registry = .{ .id = 2 };
-        display.get_registry(socket.writer(), .{
-            .registry = registry.id,
-        }) catch |err| {
-            app_log.err("Failed to establish registry with error: {s}\nExiting program", .{@errorName(err)});
-            break :exit err;
-        };
-
-        var interface_registry: InterfaceRegistry = InterfaceRegistry.init(arena, registry) catch |err| {
-            app_log.err("Failed to initialize Wayland Interface Registry. Program Cannot Proceed :: {s}", .{@errorName(err)});
-            break :exit err;
-        };
-        defer interface_registry.deinit();
-
-        var wl_event_it: EventIt(4096) = .init(socket);
-
         // Creating application state
         var state: State = state: {
 
             //  Create Basic Wayland State
             const wl_state: State.Wayland = wl_state: {
+                const socket: std.net.Stream = connect_display(arena) catch |err| {
+                    app_log.err("Failed to connect to wayland socket with error: {s}\nExiting program now", .{@errorName(err)});
+                    break :exit err;
+                };
+                const sock_writer = socket.writer();
+
+                const display: wl.Display = .{ .id = 1 };
+                const registry: wl.Registry = .{ .id = 2 };
+                display.get_registry(socket.writer(), .{
+                    .registry = registry.id,
+                }) catch |err| {
+                    app_log.err("Failed to establish registry with error: {s}\nExiting program", .{@errorName(err)});
+                    break :exit err;
+                };
+
+                var interface_registry: InterfaceRegistry = InterfaceRegistry.init(arena, registry) catch |err| {
+                    app_log.err("Failed to initialize Wayland Interface Registry. Program Cannot Proceed :: {s}", .{@errorName(err)});
+                    break :exit err;
+                };
+
+                var wl_event_it: EventIt(4096) = .init(socket);
+
                 var wl_seat_opt: ?wl.Seat = null;
                 var compositor_opt: ?wl.Compositor = null;
                 var xdg_wm_base_opt: ?xdg.WmBase = null;
@@ -86,7 +73,7 @@ pub fn main() !void {
                     switch (interface) {
                         .nil_ev => {}, // Do nothing, this is invalid
                         .display => {
-                            const response_opt = wl.Display.Event.parse(ev.header.op, ev.data) catch |err| blk: {
+                            const response_opt = wl.Display.Event.parse(socket.handle, ev.header.op, ev.data) catch |err| blk: {
                                 app_log.err("Failed to parse wl_display event with err: {s}", .{@errorName(err)});
                                 break :blk null;
                             };
@@ -99,7 +86,7 @@ pub fn main() !void {
                                 };
                         },
                         .registry => {
-                            const action_opt = wl.Registry.Event.parse(ev.header.op, ev.data) catch |err| blk: {
+                            const action_opt = wl.Registry.Event.parse(socket.handle, ev.header.op, ev.data) catch |err| blk: {
                                 app_log.err("Failed to parse wl_registry event with err: {s}", .{@errorName(err)});
                                 break :blk null;
                             };
@@ -148,7 +135,7 @@ pub fn main() !void {
                                 };
                         },
                         else => {
-                            log_unused_event(interface, ev) catch |err| {
+                            log_unused_event(socket.handle, interface, ev) catch |err| {
                                 app_log.err("Failed to log unused event with err: {s}", .{@errorName(err)});
                             };
                         },
@@ -203,7 +190,9 @@ pub fn main() !void {
                 try wl_surface.commit(sock_writer, .{});
                 const decoration_toplevel = try interface_registry.register(xdgd.ToplevelDecorationV1);
                 try xdg_decoration_manager.get_toplevel_decoration(sock_writer, .{ .id = decoration_toplevel.id, .toplevel = xdg_toplevel.id });
+
                 break :wl_state .{
+                    .wl_socket = socket,
                     .display = display,
                     .registry = registry,
                     .compositor = compositor,
@@ -213,6 +202,7 @@ pub fn main() !void {
                     .decoration_manager = xdg_decoration_manager,
                     .dmabuf = dmabuf,
 
+                    .wl_ev_iter = wl_event_it,
                     .sock_writer = sock_writer,
                     .wl_surface = wl_surface,
                     .wl_buffer = undefined,
@@ -222,30 +212,68 @@ pub fn main() !void {
                 };
             };
 
+            break :state .{
+                .wayland = wl_state,
+                .running = true,
+                .vulkan = undefined,
+                .width = undefined,
+                .height = undefined,
+            };
+        };
+
+        defer state.deinit();
+        // Looping wl_event handler thread
+        app_log.debug("Spawning Wayland Event Handler Thread", .{});
+        const wl_ev_thread = std.Thread.spawn(.{}, handle_wl_events, .{&state}) catch |err| {
+            app_log.err("Wayland Event Thread Spawn Failed :: {s}", .{@errorName(err)});
+            break :exit err;
+        };
+        defer wl_ev_thread.join();
+
+        while (!state.wayland.xdg_surface_acked) {
+            // Wait for initial xdg_surface config ack
+        }
+
+        app_log.debug("Initializing Vulkan State", .{});
+        state.vulkan = vk_state: {
+            const screen_width: u32 = @intCast(state.width);
+            const screen_height: u32 = @intCast(state.height);
+
             // Create Vulkan Graphics Context
-            app_log.debug("Initializing Vulkan Device", .{});
+            app_log.debug("Creating Graphics Context", .{});
             const graphics_context = graphics_context: {
-                break :graphics_context GraphicsContext.init(arena.allocator(), "Simp Window", .{ .width = 800, .height = 600 }, false);
+                break :graphics_context GraphicsContext.init(arena.allocator(), "Simp Window", .{ .width = screen_width, .height = screen_height }, false);
             } catch |err| {
                 app_log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
                 break :exit error.InitializationFailed;
             };
             const vk_dev = graphics_context.dev;
 
-            app_log.debug("Creating Vulkan Image", .{});
+            const vert = vk_dev.createShaderModule(&.{
+                .code_size = vert_spv.len,
+                .p_code = @ptrCast(&vert_spv),
+            }, null) catch |err| break :exit err;
+            defer vk_dev.destroyShaderModule(vert, null);
+
+            const frag = vk_dev.createShaderModule(&.{
+                .code_size = frag_spv.len,
+                .p_code = @ptrCast(&frag_spv),
+            }, null) catch |err| break :exit err;
+            defer vk_dev.destroyShaderModule(frag, null);
+
             const vk_image = vk_dev.wrapper.createImage(vk_dev.handle, &.{
                 .flags = .{ .@"2d_view_compatible_bit_ext" = true },
                 .image_type = .@"2d",
                 .extent = .{
-                    .width = 800,
-                    .height = 600,
+                    .width = @intCast(screen_width),
+                    .height = @intCast(screen_height),
                     .depth = 1,
                 },
                 .mip_levels = 1,
                 .array_layers = 1,
-                .format = .r8g8b8a8_unorm,
+                .format = .b8g8r8a8_unorm,
                 .tiling = .optimal,
-                .initial_layout = .general,
+                .initial_layout = .present_src_khr,
                 .usage = .{
                     .transfer_src_bit = true,
                     .color_attachment_bit = true,
@@ -257,11 +285,10 @@ pub fn main() !void {
                 break :exit err;
             };
 
-            app_log.debug("Creating Vulkan Image View", .{});
             const vk_image_view = vk_dev.wrapper.createImageView(vk_dev.handle, &.{
                 .view_type = .@"2d",
                 .image = vk_image,
-                .format = .r8g8b8a8_unorm,
+                .format = .b8g8r8a8_unorm,
                 .subresource_range = .{
                     .aspect_mask = .{ .color_bit = true },
                     .base_mip_level = 0,
@@ -279,16 +306,12 @@ pub fn main() !void {
                 app_log.err("Failed to create VkImageView with error: {s}", .{@errorName(err)});
                 break :exit err;
             };
-            app_log.debug("Created Vulkan Image View", .{});
 
-            app_log.debug("Getting Vulkan Image Memory Requirements", .{});
             const mem_reqs = vk_dev.wrapper.getImageMemoryRequirements(vk_dev.handle, vk_image);
-            app_log.debug("Got Vulkan Image Memory Requirements", .{});
 
             const instance = graphics_context.instance;
             const pdev = graphics_context.pdev;
 
-            app_log.debug("Obtaining Vulkan Memory Type", .{});
             const mem_type: vk.MemoryType = mem_type: {
                 const pdev_mem_reqs = instance.wrapper.getPhysicalDeviceMemoryProperties(pdev);
                 var idx: u32 = 0;
@@ -305,7 +328,6 @@ pub fn main() !void {
                 };
             };
 
-            app_log.debug("Allocating DMA Buf", .{});
             const export_mem = try vk_dev.wrapper.allocateMemory(vk_dev.handle, &.{
                 .p_next = &vk.ExportMemoryAllocateInfo{
                     .handle_types = .{
@@ -317,36 +339,31 @@ pub fn main() !void {
                 .memory_type_index = mem_type.heap_index,
             }, null);
 
-            app_log.debug("Binding Image Memory", .{});
             try vk_dev.wrapper.bindImageMemory(vk_dev.handle, vk_image, export_mem, 0);
 
-            app_log.debug("Obtaining Memory File Descriptor", .{});
             const vk_fd = try vk_dev.wrapper.getMemoryFdKHR(vk_dev.handle, &.{
                 .memory = export_mem,
                 .handle_type = .{ .dma_buf_bit_ext = true },
             });
 
-            app_log.debug("Creating Command Pool", .{});
             const cmd_pool = try vk_dev.wrapper.createCommandPool(vk_dev.handle, &.{
                 .queue_family_index = graphics_context.graphics_queue.family,
                 .flags = .{ .reset_command_buffer_bit = true },
             }, null);
 
             const image_count = 2;
-            app_log.debug("Allocating Command Buffers", .{});
             const cmd_bufs = arena.push(vk.CommandBuffer, image_count);
-            try vk_dev.wrapper.allocateCommandBuffers(vk_dev.handle, &.{
+            vk_dev.wrapper.allocateCommandBuffers(vk_dev.handle, &.{
                 .command_pool = cmd_pool,
                 .level = .primary,
                 .command_buffer_count = @intCast(cmd_bufs.len),
-            }, @ptrCast(cmd_bufs));
+            }, @ptrCast(cmd_bufs)) catch |err| break :exit err;
 
-            app_log.debug("Creating Render Pass", .{});
-            const render_pass = try vk_dev.wrapper.createRenderPass(vk_dev.handle, &.{
+            const render_pass = vk_dev.wrapper.createRenderPass(vk_dev.handle, &.{
                 .attachment_count = 1,
                 .p_attachments = &[_]vk.AttachmentDescription{
                     .{
-                        .format = .r8g8b8a8_unorm,
+                        .format = .b8g8r8a8_unorm,
                         .samples = .{ .@"1_bit" = true },
                         .load_op = .clear,
                         .store_op = .store,
@@ -369,25 +386,13 @@ pub fn main() !void {
                         },
                     },
                 },
-            }, null);
+            }, null) catch |err| break :exit err;
 
-            const vert = try vk_dev.createShaderModule(&.{
-                .code_size = vert_spv.len,
-                .p_code = @ptrCast(&vert_spv),
-            }, null);
-            defer vk_dev.destroyShaderModule(vert, null);
-
-            const frag = try vk_dev.createShaderModule(&.{
-                .code_size = frag_spv.len,
-                .p_code = @ptrCast(&frag_spv),
-            }, null);
-            defer vk_dev.destroyShaderModule(frag, null);
-
-            const pipeline_layout = try vk_dev.wrapper.createPipelineLayout(vk_dev.handle, &.{}, null);
+            const pipeline_layout = vk_dev.wrapper.createPipelineLayout(vk_dev.handle, &.{}, null) catch |err| break :exit err;
             const pipelines = arena.push(vk.Pipeline, 1);
 
             app_log.debug("Creating Graphics Pipelines", .{});
-            const pipeline = try vk_dev.wrapper.createGraphicsPipelines(vk_dev.handle, .null_handle, 1, &[_]vk.GraphicsPipelineCreateInfo{
+            const pipeline = vk_dev.wrapper.createGraphicsPipelines(vk_dev.handle, .null_handle, 1, &[_]vk.GraphicsPipelineCreateInfo{
                 .{
                     .stage_count = 2,
                     .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
@@ -416,8 +421,8 @@ pub fn main() !void {
                             .{
                                 .x = 0,
                                 .y = 0,
-                                .width = 800,
-                                .height = 600,
+                                .width = @floatFromInt(screen_width),
+                                .height = @floatFromInt(screen_height),
                                 .min_depth = 0,
                                 .max_depth = 1,
                             },
@@ -426,7 +431,7 @@ pub fn main() !void {
                         .p_scissors = &[_]vk.Rect2D{
                             .{
                                 .offset = .{ .x = 0, .y = 0 },
-                                .extent = .{ .width = 800, .height = 600 },
+                                .extent = .{ .width = @intCast(screen_width), .height = @intCast(screen_height) },
                             },
                         },
                     },
@@ -476,24 +481,21 @@ pub fn main() !void {
                     .subpass = 0,
                     .base_pipeline_index = 0,
                 },
-            }, null, pipelines.ptr);
+            }, null, pipelines.ptr) catch |err| break :exit err;
             app_log.debug("pipeline: {s}", .{@tagName(pipeline)});
 
-            app_log.debug("Allocating Framebuffers", .{});
             const framebuffers = arena.push(vk.Framebuffer, image_count);
-            app_log.debug("Creating Framebuffers", .{});
             for (framebuffers) |*framebuffer| {
-                framebuffer.* = try vk_dev.wrapper.createFramebuffer(vk_dev.handle, &.{
+                framebuffer.* = vk_dev.wrapper.createFramebuffer(vk_dev.handle, &.{
                     .render_pass = render_pass,
                     .attachment_count = 1,
                     .p_attachments = &[_]vk.ImageView{vk_image_view},
-                    .width = 800,
-                    .height = 600,
+                    .width = screen_width,
+                    .height = screen_height,
                     .layers = 1,
-                }, null);
+                }, null) catch |err| break :exit err;
             }
 
-            app_log.debug("Initial Command Buffer Invokations", .{});
             for (cmd_bufs) |cmd_buf| {
                 try vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
                     .flags = .{ .one_time_submit_bit = true },
@@ -510,7 +512,7 @@ pub fn main() !void {
                     .framebuffer = framebuffers[0],
                     .render_area = .{
                         .offset = .{ .x = 0, .y = 0 },
-                        .extent = .{ .width = 800, .height = 600 },
+                        .extent = .{ .width = screen_width, .height = screen_height },
                     },
                     .clear_value_count = 1,
                     .p_clear_values = &clear_value,
@@ -521,126 +523,90 @@ pub fn main() !void {
             }
 
             app_log.debug("Initial Queue Submission", .{});
-            try vk_dev.wrapper.queueSubmit(graphics_context.graphics_queue.handle, 1, &[_]vk.SubmitInfo{
+            vk_dev.wrapper.queueSubmit(graphics_context.graphics_queue.handle, 1, &[_]vk.SubmitInfo{
                 .{
                     .command_buffer_count = 1,
                     .p_command_buffers = cmd_bufs.ptr,
                 },
-            }, .null_handle);
+            }, .null_handle) catch |err| break :exit err;
 
-            app_log.debug("Initial Queue Wait", .{});
-            try vk_dev.wrapper.queueWaitIdle(graphics_context.graphics_queue.handle);
-
-            app_log.debug("Returning Constructed Program State", .{});
             // Return constructed state
-            break :state .{
-                .wayland = wl_state,
-                .vulkan = .{
-                    .graphics_context = graphics_context,
-                    .image = vk_image,
-                    .image_view = vk_image_view,
-                    .image_count = image_count,
-                    .export_mem = export_mem,
-                    .render_pass = render_pass,
-                    .mem_fd = vk_fd,
-                    .cmd_pool = cmd_pool,
-                    .cmd_bufs = cmd_bufs,
-                    .pipeline_layout = pipeline_layout,
-                    .pipelines = pipelines,
-                    .framebuffers = framebuffers,
-                },
-                .running = true,
+            break :vk_state .{
+                .graphics_context = graphics_context,
+                .image = vk_image,
+                .image_view = vk_image_view,
+                .image_count = image_count,
+                .export_mem = export_mem,
+                .render_pass = render_pass,
+                .mem_fd = vk_fd,
+                .cmd_pool = cmd_pool,
+                .cmd_bufs = cmd_bufs,
+                .pipeline_layout = pipeline_layout,
+                .pipelines = pipelines,
+                .framebuffers = framebuffers,
             };
         };
 
-        defer state.deinit();
-        // Looping wl_event handler thread
-        const ev_thread = std.Thread.spawn(.{}, handle_wl_events, .{ &state, &wl_event_it }) catch |err| {
-            app_log.err("Event thread died with err: {s}", .{@errorName(err)});
+        const feedback = try state.wayland.interface_registry.register(dmab.LinuxDmabufFeedbackV1);
+        try state.wayland.dmabuf.get_default_feedback(state.wayland.sock_writer, .{ .id = feedback.id });
+
+        const fnctl = std.posix.fcntl(state.vulkan.mem_fd, std.posix.F.GETFL, 0) catch |err| {
+            std.debug.print("invalid fd from vulkan?? Error :: {s}\n", .{@errorName(err)});
             break :exit err;
         };
-        defer ev_thread.join();
+        std.debug.print("fnctl :: {d}\n", .{fnctl});
 
-        while (!state.wayland.xdg_surface_acked) {
-            // Wait for initial xdg_surface config ack
-        }
+        const stat = std.posix.fstat(state.vulkan.mem_fd) catch |err| {
+            std.debug.print("Failed to state Vulkan fd :: {s}\n", .{@errorName(err)});
+            break :exit err;
+        };
+        std.debug.print("VkFd size: {d}\n", .{stat.size});
 
-        // app_log.debug("Committing Surface", .{});
-        // try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
-        app_log.debug("Registering LinuxDMAbuf Params", .{});
-        const dmabuf_params_a = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
-        app_log.debug("Creating LinuxDMAbuf Params", .{});
-        try state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
+        const dmabuf_params_a = state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1) catch |err| break :exit err;
+        state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
             .params_id = dmabuf_params_a.id,
-        });
+        }) catch |err| break :exit err;
 
-        app_log.debug("Adding File Descriptor to LinuxDMAbuf Params", .{});
-        try dmabuf_params_a.add(state.wayland.sock_writer, .{
-            .fd = @intCast(state.vulkan.mem_fd),
+        dmabuf_params_a.add(state.wayland.sock_writer, .{
+            .fd = state.vulkan.mem_fd,
             .plane_idx = 0,
             .offset = 0,
-            .stride = 600 * 4,
-            .modifier_hi = 0,
-            .modifier_lo = 0,
-        });
+            .stride = @intCast(state.width * 4),
+            .modifier_hi = Drm.Modifier.linear.hi(),
+            .modifier_lo = Drm.Modifier.linear.lo(),
+        }) catch |err| break :exit err;
 
-        app_log.debug("Registering First wl_buffer", .{});
-        const wl_buffer_a = try state.wayland.interface_registry.register(wl.Buffer);
-        app_log.debug("Trying dmabuf_params::create_immed", .{});
-        try dmabuf_params_a.create_immed(state.wayland.sock_writer, .{
-            .buffer_id = wl_buffer_a.id,
-            .width = 800,
-            .height = 600,
-            .format = @intFromEnum(DRM_FORMAT_RGBA8888),
-            .flags = .{},
+        const wl_buffer_a = state.wayland.interface_registry.register(wl.Buffer) catch |err| break :exit err;
+        std.debug.print("::Creating DMA Buf::\nbuf id: {d}\nvk_fd: {d}\nwidth: {d}\nheight: {d}\nstride: {d}\n", .{
+            wl_buffer_a.id,
+            state.vulkan.mem_fd,
+            state.width,
+            state.height,
+            @as(u32, @intCast(state.width * 4)),
         });
+        dmabuf_params_a.create_immed(state.wayland.sock_writer, .{
+            .buffer_id = wl_buffer_a.id,
+            .width = @intCast(state.width),
+            .height = @intCast(state.height),
+            .format = @intFromEnum(Drm.Format.xrgb8888),
+            .flags = .{},
+        }) catch |err| break :exit err;
         state.wayland.wl_buffer[0] = wl_buffer_a;
 
-        app_log.debug("Registering LinuxDMAbuf Params", .{});
-        const dmabuf_params_b = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
-        app_log.debug("Creating LinuxDMAbuf Params", .{});
-        try state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
-            .params_id = dmabuf_params_b.id,
-        });
+        state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
-        app_log.debug("Adding File Descriptor to LinuxDMAbuf Params", .{});
-        try dmabuf_params_b.add(state.wayland.sock_writer, .{
-            .fd = @intCast(state.vulkan.mem_fd),
-            .plane_idx = 0,
-            .offset = 1,
-            .stride = 600 * 4,
-            .modifier_hi = 0,
-            .modifier_lo = 0,
-        });
-
-        app_log.debug("Registering Second wl_buffer", .{});
-        const wl_buffer_b = try state.wayland.interface_registry.register(wl.Buffer);
-        app_log.debug("Trying dmabuf_params::create_immed", .{});
-        try dmabuf_params_b.create_immed(state.wayland.sock_writer, .{
-            .buffer_id = wl_buffer_b.id,
-            .width = 800,
-            .height = 600,
-            .format = @intFromEnum(DRM_FORMAT_RGBA8888),
-            .flags = .{},
-        });
-        state.wayland.wl_buffer[1] = wl_buffer_b;
-
-        app_log.debug("Committing Surface", .{});
-        try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
-
-        app_log.debug("Attaching Surface to Buffer", .{});
-        try state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
+        state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
             .buffer = wl_buffer_a.id,
             .x = 0,
             .y = 0,
-        });
+        }) catch |err| break :exit err;
 
-        app_log.debug("Committing Surface", .{});
-        try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
+        state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
         var cur_frame_idx: usize = 0;
         while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.vulkan.image_count) {
             // Do stuff
+
             const clear_value = [_]vk.ClearValue{
                 .{
                     .color = .{ .float_32 = [_]f32{ 1.0, 1.0, 1.0, 1.0 } }, // White color
@@ -648,42 +614,40 @@ pub fn main() !void {
             };
 
             const vk_dev = state.vulkan.graphics_context.dev;
+            vk_dev.wrapper.queueWaitIdle(state.vulkan.graphics_context.graphics_queue.handle) catch |err| break :exit err;
             const cmd_buf = state.vulkan.cmd_bufs[cur_frame_idx];
             const graphics_queue = state.vulkan.graphics_context.graphics_queue;
 
-            try vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
+            vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
                 .flags = .{ .one_time_submit_bit = true },
-            });
+            }) catch |err| break :exit err;
 
             vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
                 .render_pass = state.vulkan.render_pass,
                 .framebuffer = state.vulkan.framebuffers[cur_frame_idx],
                 .render_area = .{
                     .offset = .{ .x = 0, .y = 0 },
-                    .extent = .{ .width = 800, .height = 600 },
+                    .extent = .{ .width = @intCast(state.width), .height = @intCast(state.height) },
                 },
                 .clear_value_count = 1,
                 .p_clear_values = &clear_value,
             }, .@"inline");
 
             vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
-            try vk_dev.wrapper.endCommandBuffer(cmd_buf);
-            try vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
+            vk_dev.wrapper.endCommandBuffer(cmd_buf) catch |err| break :exit err;
+            vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
                 .{
                     .command_buffer_count = 1,
                     .p_command_buffers = state.vulkan.cmd_bufs.ptr,
                 },
-            }, .null_handle);
+            }, .null_handle) catch |err| break :exit err;
 
-            app_log.debug("Attaching Surface to Buffer", .{});
-            try state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
-                .buffer = state.wayland.wl_buffer[cur_frame_idx].id,
-                .x = 0,
-                .y = 0,
-            });
-
-            app_log.debug("Committing Surface", .{});
-            try state.wayland.wl_surface.commit(state.wayland.sock_writer, .{});
+            // state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
+            //     .buffer = state.wayland.wl_buffer[cur_frame_idx].id,
+            //     .x = 0,
+            //     .y = 0,
+            // }) catch |err| break :exit err;
+            // state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
         }
     } catch |err| { // program err exit path
         app_log.err("Program exiting due to error: {s}", .{@errorName(err)});
@@ -696,6 +660,7 @@ pub fn main() !void {
 
 const State = struct {
     const Wayland = struct {
+        wl_socket: std.net.Stream,
         display: wl.Display,
         registry: wl.Registry,
         compositor: wl.Compositor,
@@ -705,6 +670,7 @@ const State = struct {
         decoration_manager: xdgd.DecorationManagerV1,
         dmabuf: dmab.LinuxDmabufV1,
 
+        wl_ev_iter: EventIt(4096),
         sock_writer: std.net.Stream.Writer,
         wl_surface: wl.Surface,
         wl_buffer: [2]wl.Buffer,
@@ -712,6 +678,7 @@ const State = struct {
         xdg_toplevel: xdg.Toplevel,
         decoration_toplevel: xdgd.ToplevelDecorationV1,
         xdg_surface_acked: bool = false,
+        socket_closed: bool = false,
     };
     const Vulkan = struct {
         graphics_context: GraphicsContext,
@@ -730,59 +697,91 @@ const State = struct {
 
     wayland: Wayland,
     vulkan: Vulkan,
+    width: i32,
+    height: i32,
     running: bool,
 
     pub fn deinit(state: *State) void {
         // Wayland Deinit
         {
-            var wl_state = state.wayland;
-            wl_state.xdg_wm_base.destroy(wl_state.sock_writer, .{}) catch |err| {
-                wl_log.err("Failed to send destroy message to xdg_wm_base:: Error: {s}", .{@errorName(err)});
-            };
+            const wl_state = &state.wayland;
+            defer wl_state.interface_registry.deinit();
+            if (!wl_state.socket_closed) {
+                defer wl_state.wl_socket.close();
 
-            wl_state.decoration_manager.destroy(wl_state.sock_writer, .{}) catch |err| {
-                wl_log.err("Failed to send release message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
-            };
+                wl_state.xdg_wm_base.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send destroy message to xdg_wm_base:: Error: {s}", .{@errorName(err)});
+                };
 
-            wl_state.wl_surface.destroy(wl_state.sock_writer, .{}) catch |err| {
-                wl_log.err("Failed to send destroy message to wl_surface:: Error: {s}", .{@errorName(err)});
-            };
+                wl_state.decoration_manager.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send release message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
+                };
 
-            wl_state.xdg_surface.destroy(wl_state.sock_writer, .{}) catch |err| {
-                wl_log.err("Failed to send release message to xdg_surface:: Error: {s}", .{@errorName(err)});
-            };
+                wl_state.wl_surface.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send destroy message to wl_surface:: Error: {s}", .{@errorName(err)});
+                };
 
-            wl_state.xdg_toplevel.destroy(wl_state.sock_writer, .{}) catch |err| {
-                wl_log.err("Failed to send release message to xdg_toplevel:: Error: {s}", .{@errorName(err)});
-            };
+                for (wl_state.wl_buffer, 0..) |buf, idx| {
+                    buf.destroy(wl_state.sock_writer, .{}) catch |err| {
+                        wl_log.err("Failed to send destroy signal to wl_buffer[{d}]:: Error: {s}", .{ idx, @errorName(err) });
+                    };
+                }
 
-            wl_state.decoration_toplevel.destroy(wl_state.sock_writer, .{}) catch |err| {
-                wl_log.err("Failed to send release message to xdg_decoration_toplevel:: Error: {s}", .{@errorName(err)});
-            };
+                wl_state.xdg_surface.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send release message to xdg_surface:: Error: {s}", .{@errorName(err)});
+                };
 
-            wl_state.decoration_manager.destroy(wl_state.sock_writer, .{}) catch |err| {
-                wl_log.err("Failed to send destroy message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
-            };
+                wl_state.xdg_toplevel.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send release message to xdg_toplevel:: Error: {s}", .{@errorName(err)});
+                };
 
-            wl_state.seat.release(wl_state.sock_writer, .{}) catch |err| {
-                wl_log.err("Failed to send release message to wl_seat:: Error: {s}", .{@errorName(err)});
-            };
+                wl_state.decoration_toplevel.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send release message to xdg_decoration_toplevel:: Error: {s}", .{@errorName(err)});
+                };
+
+                wl_state.decoration_manager.destroy(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send destroy message to xdg_decoration_manager:: Error: {s}", .{@errorName(err)});
+                };
+
+                wl_state.seat.release(wl_state.sock_writer, .{}) catch |err| {
+                    wl_log.err("Failed to send release message to wl_seat:: Error: {s}", .{@errorName(err)});
+                };
+            }
         }
         // Vulkan deinit
         {
-            state.vulkan.graphics_context.deinit();
+            const dev = state.vulkan.graphics_context.dev;
+            defer state.vulkan.graphics_context.deinit();
+
+            dev.wrapper.freeCommandBuffers(
+                dev.handle,
+                state.vulkan.cmd_pool,
+                @intCast(state.vulkan.cmd_bufs.len),
+                state.vulkan.cmd_bufs.ptr,
+            );
+            dev.wrapper.destroyPipelineLayout(dev.handle, state.vulkan.pipeline_layout, null);
+            for (state.vulkan.pipelines) |pipeline| {
+                dev.destroyPipeline(pipeline, null);
+            }
+
+            dev.wrapper.destroyImageView(dev.handle, state.vulkan.image_view, null);
+            dev.wrapper.destroyImage(dev.handle, state.vulkan.image, null);
         }
     }
 };
 
-fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
+fn handle_wl_events(state: *State) void {
     var wl_state = &state.wayland;
-    while (true) {
+    const event_iterator = &wl_state.wl_ev_iter;
+
+    loop: while (true) {
         const ev = event_iterator.next() catch |err| blk: {
             switch (err) {
                 error.RemoteClosed, error.BrokenPipe, error.StreamClosed => {
-                    app_log.err("encountered err: {any}", .{err});
-                    return err;
+                    app_log.err("Wayland Event Thread Encountered Fatal Error: {any}", .{err});
+                    wl_state.socket_closed = true;
+                    state.running = false;
+                    break :loop;
                 },
                 else => {
                     app_log.err("encountered err: {any}", .{err});
@@ -791,54 +790,108 @@ fn handle_wl_events(state: *State, event_iterator: *EventIt(4096)) !void {
             break :blk Event.nil;
         } orelse Event.nil;
         const interface = state.wayland.interface_registry.get(ev.header.id) orelse .nil_ev;
-        switch (interface) {
-            .nil_ev => {
-                // nil event handle
-            },
-            .xdg_wm_base => {
-                const action_opt: ?xdg.WmBase.Event = xdg.WmBase.Event.parse(ev.header.op, ev.data) catch null;
-                if (action_opt) |action|
-                    switch (action) {
-                        .ping => |ping| {
-                            try wl_state.xdg_wm_base.pong(wl_state.sock_writer, .{
-                                .serial = ping.serial,
-                            });
-                        },
+        const res = res: {
+            switch (interface) {
+                .nil_ev => {
+                    // nil event handle
+                },
+                .xdg_wm_base => {
+                    const action_opt: ?xdg.WmBase.Event = xdg.WmBase.Event.parse(wl_state.wl_socket.handle, ev.header.op, ev.data) catch null;
+                    if (action_opt) |action|
+                        switch (action) {
+                            .ping => |ping| {
+                                wl_state.xdg_wm_base.pong(wl_state.sock_writer, .{
+                                    .serial = ping.serial,
+                                }) catch |err| break :res err;
+                            },
+                        };
+                },
+                .xdg_surface => {
+                    const action_opt: ?xdg.Surface.Event = xdg.Surface.Event.parse(wl_state.wl_socket.handle, ev.header.op, ev.data) catch null;
+                    if (action_opt) |action|
+                        switch (action) {
+                            .configure => |configure| {
+                                wl_state.xdg_surface.ack_configure(wl_state.sock_writer, .{ .serial = configure.serial }) catch |err| break :res err;
+                                if (!state.wayland.xdg_surface_acked) state.wayland.xdg_surface_acked = true;
+                                app_log.info("Acked configure for xdg_surface", .{});
+                            },
+                        };
+                },
+                .xdg_toplevel => {
+                    const action_opt: ?xdg.Toplevel.Event = xdg.Toplevel.Event.parse(wl_state.wl_socket.handle, ev.header.op, ev.data) catch null;
+                    if (action_opt) |action|
+                        switch (action) {
+                            .configure => |configure| {
+                                state.width = configure.width;
+                                state.height = configure.height;
+                            },
+                            .close => { //  Empty struct, nothing to capture
+                                app_log.info("server is closing this toplevel", .{});
+                                app_log.warn("toplevel close handling not yet fully implemented", .{});
+                                state.running = false;
+                                break;
+                            },
+                            else => {
+                                log_unused_event(wl_state.wl_socket.handle, interface, ev) catch |err| {
+                                    wl_log.warn("Failed to log event from Interface :: {s}", .{@tagName(interface)});
+                                    break :res err;
+                                };
+                            },
+                        };
+                },
+                .dmabuf_feedback => {
+                    const feedback = dmab.LinuxDmabufFeedbackV1.Event.parse(wl_state.wl_socket.handle, ev.header.op, ev.data) catch |err| {
+                        wl_log.warn("Failed to log event from Interface :: {s}", .{@tagName(interface)});
+                        break :res err;
                     };
-            },
-            .xdg_surface => {
-                const action_opt: ?xdg.Surface.Event = xdg.Surface.Event.parse(ev.header.op, ev.data) catch null;
-                if (action_opt) |action|
-                    switch (action) {
-                        .configure => |configure| {
-                            try wl_state.xdg_surface.ack_configure(wl_state.sock_writer, .{ .serial = configure.serial });
-                            if (!state.wayland.xdg_surface_acked) state.wayland.xdg_surface_acked = true;
-                            app_log.info("Acked configure for xdg_surface", .{});
-                        },
-                    };
-            },
-            .xdg_toplevel => {
-                const action_opt: ?xdg.Toplevel.Event = xdg.Toplevel.Event.parse(ev.header.op, ev.data) catch null;
-                if (action_opt) |action|
-                    switch (action) {
-                        .configure => |configure| {
-                            _ = configure; // compositor can't tell me what to do!!!
-                        },
-                        .close => { //  Empty struct, nothing to capture
-                            app_log.info("server is closing this toplevel", .{});
-                            app_log.warn("toplevel close handling not yet fully implemented", .{});
-                            state.running = false;
-                            break;
+
+                    switch (feedback) {
+                        .format_table => |table| {
+                            const table_data = std.posix.mmap(
+                                null,
+                                table.size,
+                                std.posix.PROT.READ,
+                                .{
+                                    .TYPE = .PRIVATE,
+                                },
+                                table.fd,
+                                0,
+                            ) catch |err| {
+                                app_log.err("DMABuf Feedback :: Failed to Map Supported Formats Table :: {s}", .{@errorName(err)});
+                                break :res err;
+                            };
+                            // 16-byte pairs
+                            // 32-bit uint format
+                            // 4 bytes padding
+                            // 64-bit uint modifier
+                            app_log.info(" :: Received Format-Modifier Table From Compositor ::", .{});
+
+                            var row_iter = std.mem.window(u8, table_data, 16, 16);
+                            while (row_iter.next()) |row| {
+                                const format = std.mem.bytesToValue(u32, row[0..4]);
+                                const modifier = std.mem.bytesToValue(u64, row[8..16]);
+
+                                const format_tag = std.meta.intToEnum(Drm.Format, format) catch null;
+                                const modifier_tag = std.meta.intToEnum(Drm.Modifier, modifier) catch null;
+
+                                const format_name = if (format_tag) |tag| @tagName(tag) else "Unknown";
+                                const modifier_name = if (modifier_tag) |tag| @tagName(tag) else "Unknown";
+                                app_log.info("Format: {s},\tModifier: {s}", .{ format_name, modifier_name });
+                            }
                         },
                         else => {
-                            try log_unused_event(interface, ev);
+                            log_unused_event(wl_state.wl_socket.handle, interface, ev) catch |err| break :res err;
                         },
-                    };
-            },
-            else => {
-                try log_unused_event(interface, ev);
-            },
-        }
+                    }
+                },
+                else => {
+                    log_unused_event(wl_state.wl_socket.handle, interface, ev) catch |err| break :res err;
+                },
+            }
+        } catch |err| {
+            app_log.err("Wayland Event Thread Encountered Error: {s}", .{@errorName(err)});
+        };
+        _ = res;
     }
 }
 
@@ -975,11 +1028,11 @@ const InterfaceRegistry = struct {
     }
 };
 
-fn log_unused_event(interface: InterfaceType, event: Event) !void {
+fn log_unused_event(sock: std.posix.socket_t, interface: InterfaceType, event: Event) !void {
     switch (interface) {
         .nil_ev => app_log.debug("Encountered unused nil event", .{}),
         .display => {
-            const parsed = try wl.Display.Event.parse(event.header.op, event.data);
+            const parsed = try wl.Display.Event.parse(sock, event.header.op, event.data);
             switch (parsed) {
                 .@"error" => |err| log_display_err(err),
                 else => {
@@ -988,10 +1041,10 @@ fn log_unused_event(interface: InterfaceType, event: Event) !void {
             }
         },
         .registry => {
-            app_log.debug("Unused event: {any}", .{try wl.Registry.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Registry.Event.parse(sock, event.header.op, event.data)});
         },
         .wl_seat => {
-            const ev = try wl.Seat.Event.parse(event.header.op, event.data);
+            const ev = try wl.Seat.Event.parse(sock, event.header.op, event.data);
             switch (ev) {
                 .name => |name| {
                     app_log.debug("Unused wl_seat event: wl.Seat Name {s}", .{name.name});
@@ -1009,36 +1062,38 @@ fn log_unused_event(interface: InterfaceType, event: Event) !void {
             }
         },
         .wl_surface => {
-            app_log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(sock, event.header.op, event.data)});
         },
         .wl_buffer => {
-            app_log.debug("Unused event: {any}", .{try wl.Buffer.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Buffer.Event.parse(sock, event.header.op, event.data)});
         },
         .compositor => unreachable, // wl_compositor has no events
         .wl_callback => {
-            app_log.debug("Unused event: {any}", .{try wl.Callback.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Callback.Event.parse(sock, event.header.op, event.data)});
         },
         .xdg_wm_base => {
-            app_log.debug("Unused event: {any}", .{try xdg.WmBase.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.WmBase.Event.parse(sock, event.header.op, event.data)});
         },
         .xdg_surface => {
-            app_log.debug("Unused event: {any}", .{try xdg.Surface.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.Surface.Event.parse(sock, event.header.op, event.data)});
         },
         .xdg_toplevel => {
-            app_log.debug("Unused event: {any}", .{try xdg.Toplevel.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.Toplevel.Event.parse(sock, event.header.op, event.data)});
         },
         .xdg_decoration_manager => unreachable, // xdg_decoration_manager has no events
         .xdg_decoration_toplevel => {
-            app_log.debug("Unused event: {any}", .{try xdgd.ToplevelDecorationV1.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdgd.ToplevelDecorationV1.Event.parse(sock, event.header.op, event.data)});
         },
         .dmabuf => {
-            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufV1.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufV1.Event.parse(sock, event.header.op, event.data)});
         },
         .dmabuf_params => {
-            app_log.debug("Unused event: {any}", .{try dmab.LinuxBufferParamsV1.Event.parse(event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try dmab.LinuxBufferParamsV1.Event.parse(sock, event.header.op, event.data)});
         },
         .dmabuf_feedback => {
-            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufFeedbackV1.Event.parse(event.header.op, event.data)});
+            app_log.info("Header Size :: {d}", .{Header.Size});
+            app_log.info("DMABuf Feedback: Header :: op={d}, size={d}", .{ event.header.op, event.header.msg_size });
+            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufFeedbackV1.Event.parse(sock, event.header.op, event.data)});
         },
     }
 }
