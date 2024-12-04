@@ -108,6 +108,7 @@ pub const LinuxBufferParamsV1 = struct {
         /// invalid wl_buffer resulted from importing dmabufs via the create_immed request on given buffer_params
         invalid_wl_buffer = 7,
     };
+    
     pub const Flags = packed struct(u32) {
         /// contents are y-inverted
         y_invert: bool = false,
@@ -242,6 +243,7 @@ pub const LinuxBufferParamsV1 = struct {
 pub const LinuxDmabufFeedbackV1 = struct {
     id: u32,
     version: u32 = 5,
+
     pub const TrancheFlags = packed struct(u32) {
         /// direct scan-out tranche
         scanout: bool = false,

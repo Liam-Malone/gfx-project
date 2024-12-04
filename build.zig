@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) !void {
         .name = "wl-zig-bindgen",
         .root_source_file = b.path("src/wl-zig-bindgen.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .ReleaseSafe,
     });
 
     const bindings_generator: BindingsGenerator = .{
