@@ -73,10 +73,10 @@ pub const LinuxDmabufV1 = struct {
             modifier_hi: u32,
             modifier_lo: u32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .format = try wl_msg.parse_data(Event.Format, data) },
-                1 => .{ .modifier = try wl_msg.parse_data(Event.Modifier, data) },
+                0 => .{ .format = try wl_msg.parse_data(sock, Event.Format, data) },
+                1 => .{ .modifier = try wl_msg.parse_data(sock, Event.Modifier, data) },
                 else => {
                     log.warn("Unknown linux_dmabuf_v1 event: {d}", .{op});
                     return error.UnknownEvent;
@@ -108,13 +108,42 @@ pub const LinuxBufferParamsV1 = struct {
         /// invalid wl_buffer resulted from importing dmabufs via the create_immed request on given buffer_params
         invalid_wl_buffer = 7,
     };
-    pub const Flags = enum(u32) {
+    pub const Flags = packed struct(u32) {
         /// contents are y-inverted
-        y_invert = 1,
+        y_invert: bool = false,
         /// content is interlaced
-        interlaced = 2,
+        interlaced: bool = false,
         /// bottom field first
-        bottom_first = 4,
+        bottom_first: bool = false,
+        __reserved_bit_3: bool = false,
+        __reserved_bit_4: bool = false,
+        __reserved_bit_5: bool = false,
+        __reserved_bit_6: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     pub const destroy_params = struct {
         pub const op = 0;
@@ -196,10 +225,10 @@ pub const LinuxBufferParamsV1 = struct {
 
         /// buffer creation failed
         pub const Failed = struct {};
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .created = try wl_msg.parse_data(Event.Created, data) },
-                1 => .{ .failed = try wl_msg.parse_data(Event.Failed, data) },
+                0 => .{ .created = try wl_msg.parse_data(sock, Event.Created, data) },
+                1 => .{ .failed = try wl_msg.parse_data(sock, Event.Failed, data) },
                 else => {
                     log.warn("Unknown linux_buffer_params_v1 event: {d}", .{op});
                     return error.UnknownEvent;
@@ -213,9 +242,40 @@ pub const LinuxBufferParamsV1 = struct {
 pub const LinuxDmabufFeedbackV1 = struct {
     id: u32,
     version: u32 = 5,
-    pub const TrancheFlags = enum(u32) {
+    pub const TrancheFlags = packed struct(u32) {
         /// direct scan-out tranche
-        scanout = 1,
+        scanout: bool = false,
+        __reserved_bit_1: bool = false,
+        __reserved_bit_2: bool = false,
+        __reserved_bit_3: bool = false,
+        __reserved_bit_4: bool = false,
+        __reserved_bit_5: bool = false,
+        __reserved_bit_6: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     pub const destroy_params = struct {
         pub const op = 0;
@@ -264,17 +324,17 @@ pub const LinuxDmabufFeedbackV1 = struct {
 
         /// tranche flags
         pub const TrancheFlags = struct {
-            flags: u32,
+            flags: LinuxDmabufFeedbackV1.TrancheFlags,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .done = try wl_msg.parse_data(Event.Done, data) },
-                1 => .{ .format_table = try wl_msg.parse_data(Event.FormatTable, data) },
-                2 => .{ .main_device = try wl_msg.parse_data(Event.MainDevice, data) },
-                3 => .{ .tranche_done = try wl_msg.parse_data(Event.TrancheDone, data) },
-                4 => .{ .tranche_target_device = try wl_msg.parse_data(Event.TrancheTargetDevice, data) },
-                5 => .{ .tranche_formats = try wl_msg.parse_data(Event.TrancheFormats, data) },
-                6 => .{ .tranche_flags = try wl_msg.parse_data(Event.TrancheFlags, data) },
+                0 => .{ .done = try wl_msg.parse_data(sock, Event.Done, data) },
+                1 => .{ .format_table = try wl_msg.parse_data(sock, Event.FormatTable, data) },
+                2 => .{ .main_device = try wl_msg.parse_data(sock, Event.MainDevice, data) },
+                3 => .{ .tranche_done = try wl_msg.parse_data(sock, Event.TrancheDone, data) },
+                4 => .{ .tranche_target_device = try wl_msg.parse_data(sock, Event.TrancheTargetDevice, data) },
+                5 => .{ .tranche_formats = try wl_msg.parse_data(sock, Event.TrancheFormats, data) },
+                6 => .{ .tranche_flags = try wl_msg.parse_data(sock, Event.TrancheFlags, data) },
                 else => {
                     log.warn("Unknown linux_dmabuf_feedback_v1 event: {d}", .{op});
                     return error.UnknownEvent;

@@ -94,11 +94,11 @@ pub const ToplevelDecorationV1 = struct {
 
         /// notify a decoration mode change
         pub const Configure = struct {
-            mode: u32,
+            mode: ToplevelDecorationV1.Mode,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
+                0 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
                 else => {
                     log.warn("Unknown toplevel_decoration_v1 event: {d}", .{op});
                     return error.UnknownEvent;

@@ -24,6 +24,7 @@
             vulkan-loader
             vulkan-tools
             vulkan-headers
+            vulkan-validation-layers
             zig
           ];
           buildInputs = with pkgs; [

@@ -1,5 +1,5 @@
 .{
-    .name = "Gfx-Demo",
+    .name = "SimpGfx",
     .version = "0.0.0",
     .dependencies = .{
         .@"vulkan-zig" = .{

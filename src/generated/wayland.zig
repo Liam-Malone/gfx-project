@@ -63,10 +63,10 @@ pub const Display = struct {
         pub const DeleteId = struct {
             id: u32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .@"error" = try wl_msg.parse_data(Event.Error, data) },
-                1 => .{ .delete_id = try wl_msg.parse_data(Event.DeleteId, data) },
+                0 => .{ .@"error" = try wl_msg.parse_data(sock, Event.Error, data) },
+                1 => .{ .delete_id = try wl_msg.parse_data(sock, Event.DeleteId, data) },
                 else => {
                     log.warn("Unknown display event: {d}", .{op});
                     return error.UnknownEvent;
@@ -111,10 +111,10 @@ pub const Registry = struct {
         pub const GlobalRemove = struct {
             name: u32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .global = try wl_msg.parse_data(Event.Global, data) },
-                1 => .{ .global_remove = try wl_msg.parse_data(Event.GlobalRemove, data) },
+                0 => .{ .global = try wl_msg.parse_data(sock, Event.Global, data) },
+                1 => .{ .global_remove = try wl_msg.parse_data(sock, Event.GlobalRemove, data) },
                 else => {
                     log.warn("Unknown registry event: {d}", .{op});
                     return error.UnknownEvent;
@@ -135,9 +135,9 @@ pub const Callback = struct {
         pub const Done = struct {
             callback_data: u32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .done = try wl_msg.parse_data(Event.Done, data) },
+                0 => .{ .done = try wl_msg.parse_data(sock, Event.Done, data) },
                 else => {
                     log.warn("Unknown callback event: {d}", .{op});
                     return error.UnknownEvent;
@@ -508,11 +508,11 @@ pub const Shm = struct {
 
         /// pixel format description
         pub const Format = struct {
-            format: u32,
+            format: Shm.Format,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .format = try wl_msg.parse_data(Event.Format, data) },
+                0 => .{ .format = try wl_msg.parse_data(sock, Event.Format, data) },
                 else => {
                     log.warn("Unknown shm event: {d}", .{op});
                     return error.UnknownEvent;
@@ -541,9 +541,9 @@ pub const Buffer = struct {
 
         /// compositor releases buffer
         pub const Release = struct {};
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .release = try wl_msg.parse_data(Event.Release, data) },
+                0 => .{ .release = try wl_msg.parse_data(sock, Event.Release, data) },
                 else => {
                     log.warn("Unknown buffer event: {d}", .{op});
                     return error.UnknownEvent;
@@ -640,18 +640,18 @@ pub const DataOffer = struct {
 
         /// notify the source-side available actions
         pub const SourceActions = struct {
-            source_actions: u32,
+            source_actions: DataDeviceManager.DndAction,
         };
 
         /// notify the selected action
         pub const Action = struct {
-            dnd_action: u32,
+            dnd_action: DataDeviceManager.DndAction,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .offer = try wl_msg.parse_data(Event.Offer, data) },
-                1 => .{ .source_actions = try wl_msg.parse_data(Event.SourceActions, data) },
-                2 => .{ .action = try wl_msg.parse_data(Event.Action, data) },
+                0 => .{ .offer = try wl_msg.parse_data(sock, Event.Offer, data) },
+                1 => .{ .source_actions = try wl_msg.parse_data(sock, Event.SourceActions, data) },
+                2 => .{ .action = try wl_msg.parse_data(sock, Event.Action, data) },
                 else => {
                     log.warn("Unknown data_offer event: {d}", .{op});
                     return error.UnknownEvent;
@@ -734,16 +734,16 @@ pub const DataSource = struct {
 
         /// notify the selected action
         pub const Action = struct {
-            dnd_action: u32,
+            dnd_action: DataDeviceManager.DndAction,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .target = try wl_msg.parse_data(Event.Target, data) },
-                1 => .{ .send = try wl_msg.parse_data(Event.Send, data) },
-                2 => .{ .cancelled = try wl_msg.parse_data(Event.Cancelled, data) },
-                3 => .{ .dnd_drop_performed = try wl_msg.parse_data(Event.DndDropPerformed, data) },
-                4 => .{ .dnd_finished = try wl_msg.parse_data(Event.DndFinished, data) },
-                5 => .{ .action = try wl_msg.parse_data(Event.Action, data) },
+                0 => .{ .target = try wl_msg.parse_data(sock, Event.Target, data) },
+                1 => .{ .send = try wl_msg.parse_data(sock, Event.Send, data) },
+                2 => .{ .cancelled = try wl_msg.parse_data(sock, Event.Cancelled, data) },
+                3 => .{ .dnd_drop_performed = try wl_msg.parse_data(sock, Event.DndDropPerformed, data) },
+                4 => .{ .dnd_finished = try wl_msg.parse_data(sock, Event.DndFinished, data) },
+                5 => .{ .action = try wl_msg.parse_data(sock, Event.Action, data) },
                 else => {
                     log.warn("Unknown data_source event: {d}", .{op});
                     return error.UnknownEvent;
@@ -843,14 +843,14 @@ pub const DataDevice = struct {
         pub const Selection = struct {
             id: u32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .data_offer = try wl_msg.parse_data(Event.DataOffer, data) },
-                1 => .{ .enter = try wl_msg.parse_data(Event.Enter, data) },
-                2 => .{ .leave = try wl_msg.parse_data(Event.Leave, data) },
-                3 => .{ .motion = try wl_msg.parse_data(Event.Motion, data) },
-                4 => .{ .drop = try wl_msg.parse_data(Event.Drop, data) },
-                5 => .{ .selection = try wl_msg.parse_data(Event.Selection, data) },
+                0 => .{ .data_offer = try wl_msg.parse_data(sock, Event.DataOffer, data) },
+                1 => .{ .enter = try wl_msg.parse_data(sock, Event.Enter, data) },
+                2 => .{ .leave = try wl_msg.parse_data(sock, Event.Leave, data) },
+                3 => .{ .motion = try wl_msg.parse_data(sock, Event.Motion, data) },
+                4 => .{ .drop = try wl_msg.parse_data(sock, Event.Drop, data) },
+                5 => .{ .selection = try wl_msg.parse_data(sock, Event.Selection, data) },
                 else => {
                     log.warn("Unknown data_device event: {d}", .{op});
                     return error.UnknownEvent;
@@ -866,15 +866,43 @@ pub const DataDeviceManager = struct {
     version: u32 = 3,
 
     /// drag and drop actions
-    pub const DndAction = enum(u32) {
+    pub const DndAction = packed struct(u32) {
         /// no action
-        none = 0,
+        none: bool = false,
         /// copy action
-        copy = 1,
+        copy: bool = false,
         /// move action
-        move = 2,
+        move: bool = false,
         /// ask action
-        ask = 4,
+        ask: bool = false,
+        __reserved_bit_4: bool = false,
+        __reserved_bit_5: bool = false,
+        __reserved_bit_6: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     pub const create_data_source_params = struct {
         pub const op = 0;
@@ -932,30 +960,84 @@ pub const ShellSurface = struct {
     version: u32 = 1,
 
     /// edge values for resizing
-    pub const Resize = enum(u32) {
+    pub const Resize = packed struct(u32) {
         /// no edge
-        none = 0,
+        none: bool = false,
         /// top edge
-        top = 1,
+        top: bool = false,
         /// bottom edge
-        bottom = 2,
+        bottom: bool = false,
         /// left edge
-        left = 4,
+        left: bool = false,
         /// top and left edges
-        top_left = 5,
+        top_left: bool = false,
         /// bottom and left edges
-        bottom_left = 6,
+        bottom_left: bool = false,
         /// right edge
-        right = 8,
+        right: bool = false,
         /// top and right edges
-        top_right = 9,
+        top_right: bool = false,
         /// bottom and right edges
-        bottom_right = 10,
+        bottom_right: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     /// details of transient behaviour
-    pub const Transient = enum(u32) {
+    pub const Transient = packed struct(u32) {
         /// do not set keyboard focus
-        inactive = 0x1,
+        inactive: bool = false,
+        __reserved_bit_1: bool = false,
+        __reserved_bit_2: bool = false,
+        __reserved_bit_3: bool = false,
+        __reserved_bit_4: bool = false,
+        __reserved_bit_5: bool = false,
+        __reserved_bit_6: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     /// different method to set the surface fullscreen
     pub const FullscreenMethod = enum(u32) {
@@ -1123,18 +1205,18 @@ pub const ShellSurface = struct {
 
         /// suggest resize
         pub const Configure = struct {
-            edges: u32,
+            edges: ShellSurface.Resize,
             width: i32,
             height: i32,
         };
 
         /// popup interaction is done
         pub const PopupDone = struct {};
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .ping = try wl_msg.parse_data(Event.Ping, data) },
-                1 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
-                2 => .{ .popup_done = try wl_msg.parse_data(Event.PopupDone, data) },
+                0 => .{ .ping = try wl_msg.parse_data(sock, Event.Ping, data) },
+                1 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
+                2 => .{ .popup_done = try wl_msg.parse_data(sock, Event.PopupDone, data) },
                 else => {
                     log.warn("Unknown shell_surface event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1330,14 +1412,14 @@ pub const Surface = struct {
 
         /// preferred buffer transform for the surface
         pub const PreferredBufferTransform = struct {
-            transform: u32,
+            transform: Output.Transform,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .enter = try wl_msg.parse_data(Event.Enter, data) },
-                1 => .{ .leave = try wl_msg.parse_data(Event.Leave, data) },
-                2 => .{ .preferred_buffer_scale = try wl_msg.parse_data(Event.PreferredBufferScale, data) },
-                3 => .{ .preferred_buffer_transform = try wl_msg.parse_data(Event.PreferredBufferTransform, data) },
+                0 => .{ .enter = try wl_msg.parse_data(sock, Event.Enter, data) },
+                1 => .{ .leave = try wl_msg.parse_data(sock, Event.Leave, data) },
+                2 => .{ .preferred_buffer_scale = try wl_msg.parse_data(sock, Event.PreferredBufferScale, data) },
+                3 => .{ .preferred_buffer_transform = try wl_msg.parse_data(sock, Event.PreferredBufferTransform, data) },
                 else => {
                     log.warn("Unknown surface event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1353,13 +1435,42 @@ pub const Seat = struct {
     version: u32 = 10,
 
     /// seat capability bitmask
-    pub const Capability = enum(u32) {
+    pub const Capability = packed struct(u32) {
         /// the seat has pointer devices
-        pointer = 1,
+        pointer: bool = false,
         /// the seat has one or more keyboards
-        keyboard = 2,
+        keyboard: bool = false,
         /// the seat has touch devices
-        touch = 4,
+        touch: bool = false,
+        __reserved_bit_3: bool = false,
+        __reserved_bit_4: bool = false,
+        __reserved_bit_5: bool = false,
+        __reserved_bit_6: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     /// wl_seat error values
     pub const Error = enum(u32) {
@@ -1417,17 +1528,17 @@ pub const Seat = struct {
 
         /// seat capabilities changed
         pub const Capabilities = struct {
-            capabilities: u32,
+            capabilities: Seat.Capability,
         };
 
         /// unique identifier for this seat
         pub const Name = struct {
             name: [:0]const u8,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .capabilities = try wl_msg.parse_data(Event.Capabilities, data) },
-                1 => .{ .name = try wl_msg.parse_data(Event.Name, data) },
+                0 => .{ .capabilities = try wl_msg.parse_data(sock, Event.Capabilities, data) },
+                1 => .{ .name = try wl_msg.parse_data(sock, Event.Name, data) },
                 else => {
                     log.warn("Unknown seat event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1543,13 +1654,13 @@ pub const Pointer = struct {
             serial: u32,
             time: u32,
             button: u32,
-            state: u32,
+            state: Pointer.ButtonState,
         };
 
         /// axis event
         pub const Axis = struct {
             time: u32,
-            axis: u32,
+            axis: Pointer.Axis,
             value: f32,
         };
 
@@ -1558,45 +1669,45 @@ pub const Pointer = struct {
 
         /// axis source event
         pub const AxisSource = struct {
-            axis_source: u32,
+            axis_source: Pointer.AxisSource,
         };
 
         /// axis stop event
         pub const AxisStop = struct {
             time: u32,
-            axis: u32,
+            axis: Pointer.Axis,
         };
 
         /// axis click event
         pub const AxisDiscrete = struct {
-            axis: u32,
+            axis: Pointer.Axis,
             discrete: i32,
         };
 
         /// axis high-resolution scroll event
         pub const AxisValue120 = struct {
-            axis: u32,
+            axis: Pointer.Axis,
             value120: i32,
         };
 
         /// axis relative physical direction event
         pub const AxisRelativeDirection = struct {
-            axis: u32,
-            direction: u32,
+            axis: Pointer.Axis,
+            direction: Pointer.AxisRelativeDirection,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .enter = try wl_msg.parse_data(Event.Enter, data) },
-                1 => .{ .leave = try wl_msg.parse_data(Event.Leave, data) },
-                2 => .{ .motion = try wl_msg.parse_data(Event.Motion, data) },
-                3 => .{ .button = try wl_msg.parse_data(Event.Button, data) },
-                4 => .{ .axis = try wl_msg.parse_data(Event.Axis, data) },
-                5 => .{ .frame = try wl_msg.parse_data(Event.Frame, data) },
-                6 => .{ .axis_source = try wl_msg.parse_data(Event.AxisSource, data) },
-                7 => .{ .axis_stop = try wl_msg.parse_data(Event.AxisStop, data) },
-                8 => .{ .axis_discrete = try wl_msg.parse_data(Event.AxisDiscrete, data) },
-                9 => .{ .axis_value120 = try wl_msg.parse_data(Event.AxisValue120, data) },
-                10 => .{ .axis_relative_direction = try wl_msg.parse_data(Event.AxisRelativeDirection, data) },
+                0 => .{ .enter = try wl_msg.parse_data(sock, Event.Enter, data) },
+                1 => .{ .leave = try wl_msg.parse_data(sock, Event.Leave, data) },
+                2 => .{ .motion = try wl_msg.parse_data(sock, Event.Motion, data) },
+                3 => .{ .button = try wl_msg.parse_data(sock, Event.Button, data) },
+                4 => .{ .axis = try wl_msg.parse_data(sock, Event.Axis, data) },
+                5 => .{ .frame = try wl_msg.parse_data(sock, Event.Frame, data) },
+                6 => .{ .axis_source = try wl_msg.parse_data(sock, Event.AxisSource, data) },
+                7 => .{ .axis_stop = try wl_msg.parse_data(sock, Event.AxisStop, data) },
+                8 => .{ .axis_discrete = try wl_msg.parse_data(sock, Event.AxisDiscrete, data) },
+                9 => .{ .axis_value120 = try wl_msg.parse_data(sock, Event.AxisValue120, data) },
+                10 => .{ .axis_relative_direction = try wl_msg.parse_data(sock, Event.AxisRelativeDirection, data) },
                 else => {
                     log.warn("Unknown pointer event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1646,7 +1757,7 @@ pub const Keyboard = struct {
 
         /// keyboard mapping
         pub const Keymap = struct {
-            format: u32,
+            format: Keyboard.KeymapFormat,
             fd: wl_msg.FileDescriptor,
             size: u32,
         };
@@ -1669,7 +1780,7 @@ pub const Keyboard = struct {
             serial: u32,
             time: u32,
             key: u32,
-            state: u32,
+            state: Keyboard.KeyState,
         };
 
         /// modifier and group state
@@ -1686,14 +1797,14 @@ pub const Keyboard = struct {
             rate: i32,
             delay: i32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .keymap = try wl_msg.parse_data(Event.Keymap, data) },
-                1 => .{ .enter = try wl_msg.parse_data(Event.Enter, data) },
-                2 => .{ .leave = try wl_msg.parse_data(Event.Leave, data) },
-                3 => .{ .key = try wl_msg.parse_data(Event.Key, data) },
-                4 => .{ .modifiers = try wl_msg.parse_data(Event.Modifiers, data) },
-                5 => .{ .repeat_info = try wl_msg.parse_data(Event.RepeatInfo, data) },
+                0 => .{ .keymap = try wl_msg.parse_data(sock, Event.Keymap, data) },
+                1 => .{ .enter = try wl_msg.parse_data(sock, Event.Enter, data) },
+                2 => .{ .leave = try wl_msg.parse_data(sock, Event.Leave, data) },
+                3 => .{ .key = try wl_msg.parse_data(sock, Event.Key, data) },
+                4 => .{ .modifiers = try wl_msg.parse_data(sock, Event.Modifiers, data) },
+                5 => .{ .repeat_info = try wl_msg.parse_data(sock, Event.RepeatInfo, data) },
                 else => {
                     log.warn("Unknown keyboard event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1769,15 +1880,15 @@ pub const Touch = struct {
             id: i32,
             orientation: f32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .down = try wl_msg.parse_data(Event.Down, data) },
-                1 => .{ .up = try wl_msg.parse_data(Event.Up, data) },
-                2 => .{ .motion = try wl_msg.parse_data(Event.Motion, data) },
-                3 => .{ .frame = try wl_msg.parse_data(Event.Frame, data) },
-                4 => .{ .cancel = try wl_msg.parse_data(Event.Cancel, data) },
-                5 => .{ .shape = try wl_msg.parse_data(Event.Shape, data) },
-                6 => .{ .orientation = try wl_msg.parse_data(Event.Orientation, data) },
+                0 => .{ .down = try wl_msg.parse_data(sock, Event.Down, data) },
+                1 => .{ .up = try wl_msg.parse_data(sock, Event.Up, data) },
+                2 => .{ .motion = try wl_msg.parse_data(sock, Event.Motion, data) },
+                3 => .{ .frame = try wl_msg.parse_data(sock, Event.Frame, data) },
+                4 => .{ .cancel = try wl_msg.parse_data(sock, Event.Cancel, data) },
+                5 => .{ .shape = try wl_msg.parse_data(sock, Event.Shape, data) },
+                6 => .{ .orientation = try wl_msg.parse_data(sock, Event.Orientation, data) },
                 else => {
                     log.warn("Unknown touch event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1827,11 +1938,41 @@ pub const Output = struct {
         flipped_270 = 7,
     };
     /// mode information
-    pub const Mode = enum(u32) {
+    pub const Mode = packed struct(u32) {
         /// indicates this is the current mode
-        current = 0x1,
+        current: bool = false,
         /// indicates this is the preferred mode
-        preferred = 0x2,
+        preferred: bool = false,
+        __reserved_bit_2: bool = false,
+        __reserved_bit_3: bool = false,
+        __reserved_bit_4: bool = false,
+        __reserved_bit_5: bool = false,
+        __reserved_bit_6: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     pub const release_params = struct {
         pub const op = 0;
@@ -1856,15 +1997,15 @@ pub const Output = struct {
             y: i32,
             physical_width: i32,
             physical_height: i32,
-            subpixel: i32,
+            subpixel: Output.Subpixel,
             make: [:0]const u8,
             model: [:0]const u8,
-            transform: i32,
+            transform: Output.Transform,
         };
 
         /// advertise available modes for the output
         pub const Mode = struct {
-            flags: u32,
+            flags: Output.Mode,
             width: i32,
             height: i32,
             refresh: i32,
@@ -1887,14 +2028,14 @@ pub const Output = struct {
         pub const Description = struct {
             description: [:0]const u8,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .geometry = try wl_msg.parse_data(Event.Geometry, data) },
-                1 => .{ .mode = try wl_msg.parse_data(Event.Mode, data) },
-                2 => .{ .done = try wl_msg.parse_data(Event.Done, data) },
-                3 => .{ .scale = try wl_msg.parse_data(Event.Scale, data) },
-                4 => .{ .name = try wl_msg.parse_data(Event.Name, data) },
-                5 => .{ .description = try wl_msg.parse_data(Event.Description, data) },
+                0 => .{ .geometry = try wl_msg.parse_data(sock, Event.Geometry, data) },
+                1 => .{ .mode = try wl_msg.parse_data(sock, Event.Mode, data) },
+                2 => .{ .done = try wl_msg.parse_data(sock, Event.Done, data) },
+                3 => .{ .scale = try wl_msg.parse_data(sock, Event.Scale, data) },
+                4 => .{ .name = try wl_msg.parse_data(sock, Event.Name, data) },
+                5 => .{ .description = try wl_msg.parse_data(sock, Event.Description, data) },
                 else => {
                     log.warn("Unknown output event: {d}", .{op});
                     return error.UnknownEvent;

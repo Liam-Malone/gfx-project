@@ -21,6 +21,131 @@ pub const Header = packed struct(u64) {
 
 pub const FileDescriptor = std.posix.fd_t;
 
+pub const CtrlMsgIter = struct {
+    const Buf = struct {
+        data: [20]FileDescriptor = undefined,
+        first_occ: usize = 0,
+        first_free: usize = 0,
+    };
+
+    buf: Buf,
+    sock: std.posix.socket_t,
+
+    pub fn init(sock: std.posix.socket_t) CtrlMsgIter {
+        return .{
+            .sock = sock,
+        };
+    }
+
+    pub fn receive_cmsg(iter: *CtrlMsgIter) !void {
+        var cmsg_buf: [@sizeOf(cmsg(FileDescriptor)) * 2]u8 = undefined;
+
+        var iov = [_]std.posix.iovec{
+            .{
+                .base = iter.buf.ptr,
+                .len = 0,
+            },
+        };
+
+        var msg: std.posix.msghdr = .{
+            .name = null,
+            .namelen = 0,
+            .iov = &iov,
+            .iovlen = 1,
+            .control = &cmsg_buf,
+            .controllen = cmsg_buf.len,
+            .flags = 0,
+        };
+
+        var rc: usize = 0;
+
+        while (rc < 64) {
+            rc += std.os.linux.recvmsg(iter.socket, &msg, 0);
+
+            if (rc > 100000) {
+                std.log.err("recvmsg failed with code: {d}", .{rc});
+                return error.CMsgReceiveFailed;
+            }
+
+            if (rc > 0) {
+                std.debug.print("rc is: {d}\n", .{rc});
+                const ctrl_buf: [*]u8 = @ptrCast(msg.control.?);
+                const ctrl_msg: *cmsg(FileDescriptor) = @ptrCast(@alignCast(ctrl_buf[0..64]));
+
+                if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == 0x01) {
+                    iter.buf.data[iter.buf.first_free] = ctrl_msg.data;
+                    iter.buf.first_free += if (iter.buf.first_free < iter.buf.len - 1) 1 else -iter.buf.free;
+                } else std.debug.print("type: {d} (want {d}), level: {d} (want {d})\n", .{
+                    ctrl_msg.type,
+                    std.posix.SOL.SOCKET,
+                    ctrl_msg.level,
+                    0x01,
+                });
+            }
+        }
+
+        return null;
+    }
+
+    pub fn next(iter: *CtrlMsgIter) ?FileDescriptor {
+        if (iter.buf.first_occ == iter.buf.first_occ) {
+            iter.receive_cmsg();
+        }
+        defer iter.buf.first_occ += 1;
+        return iter.buf[iter.buf.first_occ];
+    }
+};
+
+pub fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) !?FileDescriptor {
+    var cmsg_buf: [@sizeOf(cmsg(FileDescriptor)) * 2]u8 = undefined;
+
+    var iov = [_]std.posix.iovec{
+        .{
+            .base = buf.ptr,
+            .len = 0,
+        },
+    };
+
+    var msg: std.posix.msghdr = .{
+        .name = null,
+        .namelen = 0,
+        .iov = &iov,
+        .iovlen = 1,
+        .control = &cmsg_buf,
+        .controllen = cmsg_buf.len,
+        .flags = 0,
+    };
+
+    var rc: usize = 0;
+
+    while (rc < 64) {
+        rc += std.os.linux.recvmsg(socket, &msg, 0);
+
+        if (rc > 100000) {
+            std.log.err("recvmsg failed with code: {d}", .{rc});
+            return error.CMsgReceiveFailed;
+        }
+
+        if (rc > 0) {
+            std.debug.print("rc is: {d}\n", .{rc});
+            const ctrl_buf: [*]u8 = @ptrCast(msg.control.?);
+            const ctrl_msg: *cmsg(FileDescriptor) = @ptrCast(@alignCast(ctrl_buf[0..64]));
+
+            if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == 0x01)
+                return ctrl_msg.data
+            else
+                std.debug.print("type: {d} (want {d}), level: {d} (want {d})\n", .{
+                    ctrl_msg.type,
+                    std.posix.SOL.SOCKET,
+                    ctrl_msg.level,
+                    0x01,
+                });
+        }
+    }
+
+    return null;
+}
+
 const EventParser = struct {
     buf: []const u8,
 
@@ -70,20 +195,31 @@ const EventParser = struct {
     }
 };
 
-pub fn parse_data(comptime T: type, data: []const u8) !T {
+pub fn parse_data(socket: std.posix.socket_t, comptime T: type, data: []const u8) !T {
     var event_result: T = undefined;
     var data_iter: EventParser = .{ .buf = data };
 
-    inline for (std.meta.fields(T)) |field| {
-        @field(event_result, field.name) = switch (field.type) {
-            u32 => try data_iter.get_u32(),
-            i32 => try data_iter.get_i32(),
-            [:0]const u8 => try data_iter.get_string(),
-            []const u8 => try data_iter.get_arr(),
-            else => {
-                @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type });
-            },
-        };
+    if (@hasField(T, "fd")) {
+        _ = socket;
+        return error.FdReceivingNotYetSupported;
+    } else {
+        inline for (std.meta.fields(T)) |field| {
+            @field(event_result, field.name) = switch (field.type) {
+                u32 => try data_iter.get_u32(),
+                i32 => try data_iter.get_i32(),
+                [:0]const u8 => try data_iter.get_string(),
+                []const u8 => try data_iter.get_arr(),
+                else => parse: {
+                    switch (@typeInfo(field.type)) {
+                        .@"enum" => break :parse @enumFromInt(try data_iter.get_u32()),
+                        .@"struct" => |@"struct"| if (@"struct".layout == .@"packed") {
+                            break :parse @bitCast(try data_iter.get_u32());
+                        },
+                        else => @compileLog("Data Parse Not Implemented for field {s} of type {}", .{ field.name, field.type }),
+                    }
+                },
+            };
+        }
     }
     return event_result;
 }
@@ -93,6 +229,7 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
     inline for (std.meta.fields(@TypeOf(item))) |field| {
         const field_type: type = switch (@typeInfo(field.type)) {
             .@"enum" => u32,
+            .@"struct" => |@"struct"| if (@"struct".layout == .@"packed") u32 else field.type,
             else => field.type,
         };
         switch (field_type) {
@@ -113,7 +250,6 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
 
     if (@hasField(T, "fd")) {
         const msg_len = @sizeOf(T) - @sizeOf(FileDescriptor);
-        std.log.debug("msg_len: {d}", .{msg_len});
         var msg: [msg_len]u8 = undefined;
         var idx: usize = 0;
         var fd: FileDescriptor = undefined;
@@ -123,7 +259,6 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
                 fd = @intCast(val);
             } else {
                 const field_as_bytes = std.mem.asBytes(&val);
-                std.log.debug("length of {s} :: {d}", .{ field.name, field_as_bytes.len });
                 @memcpy(msg[idx .. idx + field_as_bytes.len], field_as_bytes);
                 idx += field_as_bytes.len;
             }
@@ -136,10 +271,16 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
     inline for (std.meta.fields(@TypeOf(item))) |field| {
         const field_type: type = switch (@typeInfo(field.type)) {
             .@"enum" => u32,
+            .@"struct" => |@"struct"| if (@"struct".layout == .@"packed") u32 else field.type,
             else => field.type,
         };
+
         const field_val = @field(item, field.name);
-        const msg_val = if (@typeInfo(field.type) == .@"enum") @intFromEnum(field_val) else field_val;
+        const msg_val = switch (@typeInfo(field.type)) {
+            .@"enum" => @intFromEnum(field_val),
+            .@"struct" => @as(u32, @bitCast(field_val)),
+            else => field_val,
+        };
         switch (field_type) {
             u32 => try writer.writeInt(u32, msg_val, endian),
             i32 => try writer.writeInt(i32, msg_val, endian),
@@ -167,7 +308,6 @@ fn write_arr(writer: anytype, arr: []const u8) !void {
 }
 
 fn write_str(writer: anytype, str: [:0]const u8) !void {
-    std.debug.print("writing: {s}\n", .{str});
     try write_arr(writer, @ptrCast(str[0 .. str.len + 1]));
 }
 
@@ -224,6 +364,7 @@ fn cmsg_align(len: usize) usize {
     const size_t = c_ulonglong;
     return (((len) + @sizeOf(size_t) - 1) & ~(@as(usize, @sizeOf(size_t) - 1)));
 }
+
 /// ported version of musl libc's CMSG_SPACE macro for getting space of a Control Message
 ///
 /// Macro Definition:
@@ -231,12 +372,41 @@ fn cmsg_align(len: usize) usize {
 fn cmsg_space(len: usize) usize {
     return cmsg_align(len) + cmsg_align(@sizeOf(std.posix.msghdr));
 }
+
 /// ported version of musl libc's CMSG_LEN macro for getting length of a Control Message
 ///
 /// Macro Definition:
 /// #define CMSG_LEN(len)   (CMSG_ALIGN (sizeof (struct cmsghdr)) + (len))
 fn cmsg_len(len: usize) usize {
     return cmsg_align(@sizeOf(std.posix.msghdr) + len);
+}
+
+fn __cmsg_len(ctrl_msg: anytype) usize {
+    const long = c_long;
+    return ((ctrl_msg.len + @sizeOf(long) - 1) & ~(@as(long, (@sizeOf(long) - 1))));
+}
+/// ported version of musl libc's CMSG_FIRSTHDR
+///
+/// Macro Definition:
+/// #define CMSG_FIRSTHDR(mhdr) ((size_t) (mhdr)->msg_controllen >= sizeof (struct cmsghdr) ? (struct cmsghdr *) (mhdr)->msg_control : (struct cmsghdr *) 0)
+fn cmsg_firsthdr(msghdr: std.posix.msghdr) ?*std.posix.msghdr {
+    if (msghdr.controllen >= @sizeOf(std.posix.msghdr))
+        return @ptrCast(@alignCast(msghdr.control))
+    else
+        return null;
+}
+/// ported version of musl libc's CMSG_NXTHDR
+///
+/// Macro Definition:
+/// #define CMSG_NXTHDR(mhdr, cmsg) ((cmsg)->cmsg_len < sizeof (struct cmsghdr) || \
+/// __CMSG_LEN(cmsg) + sizeof(struct cmsghdr) >= __MHDR_END(mhdr) - (unsigned char *)(cmsg) \
+/// ? 0 : (struct cmsghdr *)__CMSG_NEXT(cmsg))
+fn cmsg_nxthdr(msghdr: std.posix.msghdr, ctrl_msg: anytype) ?*std.posix.msghdr {
+    // if (ctrl_msg.len < @sizeOf(std.posix.msghdr)
+    // or ((__cmsg_len(ctrl_msg) + @sizeOf(std.posix.msghdr)) >= __msghdr_end(msghdr) - @ptrCast(ctrl_msg)))
+    _ = msghdr;
+    _ = ctrl_msg;
+    return .{};
 }
 
 fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {

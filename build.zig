@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) !void {
         .name = "wl-zig-bindgen",
         .root_source_file = b.path("src/wl-zig-bindgen.zig"),
         .target = target,
-        .optimize = .ReleaseSafe,
+        .optimize = optimize,
     });
 
     const bindings_generator: BindingsGenerator = .{
@@ -61,10 +61,11 @@ pub fn build(b: *std.Build) !void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "GfxDemo",
+        .name = "SimpGfx",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
     // TODO: Add windows and eventually macos support
@@ -91,7 +92,30 @@ pub fn build(b: *std.Build) !void {
     })) |vkzig_dep| {
         const vkzig_bindings = vkzig_dep.module("vulkan-zig");
         exe.root_module.addImport("vulkan", vkzig_bindings);
+        exe.linkSystemLibrary("vulkan");
     }
+
+    const vert_cmd = b.addSystemCommand(&.{
+        "glslc",
+        "--target-env=vulkan1.2",
+        "-o",
+    });
+    const vert_spv = vert_cmd.addOutputFileArg("vert.spv");
+    vert_cmd.addFileArg(b.path("shaders/simp.vert"));
+    exe.root_module.addAnonymousImport("vertex_shader", .{
+        .root_source_file = vert_spv,
+    });
+
+    const frag_cmd = b.addSystemCommand(&.{
+        "glslc",
+        "--target-env=vulkan1.2",
+        "-o",
+    });
+    const frag_spv = frag_cmd.addOutputFileArg("frag.spv");
+    frag_cmd.addFileArg(b.path("shaders/simp.frag"));
+    exe.root_module.addAnonymousImport("fragment_shader", .{
+        .root_source_file = frag_spv,
+    });
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);

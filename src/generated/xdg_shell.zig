@@ -80,9 +80,9 @@ pub const WmBase = struct {
         pub const Ping = struct {
             serial: u32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .ping = try wl_msg.parse_data(Event.Ping, data) },
+                0 => .{ .ping = try wl_msg.parse_data(sock, Event.Ping, data) },
                 else => {
                     log.warn("Unknown wm_base event: {d}", .{op});
                     return error.UnknownEvent;
@@ -123,14 +123,39 @@ pub const Positioner = struct {
         bottom_right = 8,
     };
     /// constraint adjustments
-    pub const ConstraintAdjustment = enum(u32) {
-        none = 0,
-        slide_x = 1,
-        slide_y = 2,
-        flip_x = 4,
-        flip_y = 8,
-        resize_x = 16,
-        resize_y = 32,
+    pub const ConstraintAdjustment = packed struct(u32) {
+        none: bool = false,
+        slide_x: bool = false,
+        slide_y: bool = false,
+        flip_x: bool = false,
+        flip_y: bool = false,
+        resize_x: bool = false,
+        resize_y: bool = false,
+        __reserved_bit_7: bool = false,
+        __reserved_bit_8: bool = false,
+        __reserved_bit_9: bool = false,
+        __reserved_bit_10: bool = false,
+        __reserved_bit_11: bool = false,
+        __reserved_bit_12: bool = false,
+        __reserved_bit_13: bool = false,
+        __reserved_bit_14: bool = false,
+        __reserved_bit_15: bool = false,
+        __reserved_bit_16: bool = false,
+        __reserved_bit_17: bool = false,
+        __reserved_bit_18: bool = false,
+        __reserved_bit_19: bool = false,
+        __reserved_bit_20: bool = false,
+        __reserved_bit_21: bool = false,
+        __reserved_bit_22: bool = false,
+        __reserved_bit_23: bool = false,
+        __reserved_bit_24: bool = false,
+        __reserved_bit_25: bool = false,
+        __reserved_bit_26: bool = false,
+        __reserved_bit_27: bool = false,
+        __reserved_bit_28: bool = false,
+        __reserved_bit_29: bool = false,
+        __reserved_bit_30: bool = false,
+        __reserved_bit_31: bool = false,
     };
     pub const destroy_params = struct {
         pub const op = 0;
@@ -345,9 +370,9 @@ pub const Surface = struct {
         pub const Configure = struct {
             serial: u32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
+                0 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
                 else => {
                     log.warn("Unknown surface event: {d}", .{op});
                     return error.UnknownEvent;
@@ -598,12 +623,12 @@ pub const Toplevel = struct {
         pub const WmCapabilities = struct {
             capabilities: []const u8,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
-                1 => .{ .close = try wl_msg.parse_data(Event.Close, data) },
-                2 => .{ .configure_bounds = try wl_msg.parse_data(Event.ConfigureBounds, data) },
-                3 => .{ .wm_capabilities = try wl_msg.parse_data(Event.WmCapabilities, data) },
+                0 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
+                1 => .{ .close = try wl_msg.parse_data(sock, Event.Close, data) },
+                2 => .{ .configure_bounds = try wl_msg.parse_data(sock, Event.ConfigureBounds, data) },
+                3 => .{ .wm_capabilities = try wl_msg.parse_data(sock, Event.WmCapabilities, data) },
                 else => {
                     log.warn("Unknown toplevel event: {d}", .{op});
                     return error.UnknownEvent;
@@ -677,11 +702,11 @@ pub const Popup = struct {
         pub const Repositioned = struct {
             token: u32,
         };
-        pub fn parse(op: u32, data: []const u8) !Event {
+        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
-                1 => .{ .popup_done = try wl_msg.parse_data(Event.PopupDone, data) },
-                2 => .{ .repositioned = try wl_msg.parse_data(Event.Repositioned, data) },
+                0 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
+                1 => .{ .popup_done = try wl_msg.parse_data(sock, Event.PopupDone, data) },
+                2 => .{ .repositioned = try wl_msg.parse_data(sock, Event.Repositioned, data) },
                 else => {
                     log.warn("Unknown popup event: {d}", .{op});
                     return error.UnknownEvent;

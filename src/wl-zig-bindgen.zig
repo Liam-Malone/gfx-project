@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Arena = std.heap.ArenaAllocator;
+const Arena = @import("Arena.zig");
 
 const xml = @import("xml.zig");
 const stdout = std.io.getStdOut().writer();
@@ -92,20 +92,43 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
                 };
 
             var enum_field_iter = enum_type.findChildrenByTag("entry");
-            try writer.print("    pub const {s} = enum (u32) {{\n", .{snakeToPascal(enum_name)});
-            while (enum_field_iter.next()) |enum_entry| {
-                if (enum_entry.getAttribute("summary")) |summary| {
-                    try writer.print(
-                        \\
-                        \\        ///{s}
-                        \\
-                    , .{IgnoreNewline{ .str = summary }});
-                } else {
-                    try writer.print("\n", .{});
+            if (enum_type.getAttribute("bitfield")) |_| {
+                // bitfield
+                try writer.print("    pub const {s} = packed struct(u32) {{\n", .{snakeToPascal(enum_name)});
+                var idx: u8 = 0;
+                while (enum_field_iter.next()) |bit_entry| : (idx += 1) {
+                    if (bit_entry.getAttribute("summary")) |summary| {
+                        try writer.print(
+                            \\
+                            \\        ///{s}
+                            \\
+                        , .{IgnoreNewline{ .str = summary }});
+                    } else {
+                        try writer.print("\n", .{});
+                    }
+                    const entry_name = bit_entry.getAttribute("name").?;
+                    try writer.print("        @\"{s}\": bool = false,", .{entry_name});
                 }
-                const entry_name = enum_entry.getAttribute("name").?;
-                const entry_value = enum_entry.getAttribute("value").?;
-                try writer.print("        @\"{s}\" = {s},", .{ entry_name, entry_value });
+
+                while (idx < 32) : (idx += 1) {
+                    try writer.print("        __reserved_bit_{d}: bool = false,", .{idx});
+                }
+            } else {
+                try writer.print("    pub const {s} = enum (u32) {{\n", .{snakeToPascal(enum_name)});
+                while (enum_field_iter.next()) |enum_entry| {
+                    if (enum_entry.getAttribute("summary")) |summary| {
+                        try writer.print(
+                            \\
+                            \\        ///{s}
+                            \\
+                        , .{IgnoreNewline{ .str = summary }});
+                    } else {
+                        try writer.print("\n", .{});
+                    }
+                    const entry_name = enum_entry.getAttribute("name").?;
+                    const entry_value = enum_entry.getAttribute("value").?;
+                    try writer.print("        @\"{s}\" = {s},", .{ entry_name, entry_value });
+                }
             }
             try writer.print("\n    }};", .{});
         }
@@ -179,7 +202,13 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
                     const arg_name = ev_arg.getAttribute("name").?;
                     try writer.print("\n             {s}", .{arg_name});
                     const arg_t_opt = ev_arg.getAttribute("type");
-                    if (arg_t_opt) |arg_t|
+                    const arg_enum_t_opt = ev_arg.getAttribute("enum");
+                    if (arg_enum_t_opt) |arg_enum_t| {
+                        if (std.mem.eql(u8, "wl_", arg_enum_t[0..3]))
+                            try writer.print(": {s},", .{snakeToPascal(arg_enum_t[3..])})
+                        else
+                            try writer.print(": {s}.{s},", .{ snakeToPascal(name), snakeToPascal(arg_enum_t) });
+                    } else if (arg_t_opt) |arg_t|
                         try writer.print(": {s},", .{(try Type.from_string(arg_t)).to_zig_type_string().?})
                     else
                         try writer.print(",", .{});
@@ -190,7 +219,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
             event_iter = interface.findChildrenByTag("event"); // reset
             try writer.print(
                 \\
-                \\        pub fn parse(op: u32, data: []const u8) !Event {{
+                \\        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {{
                 \\            return switch (op) {{
                 \\
             , .{});
@@ -199,7 +228,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
 
                 // const ev_name = if (std.mem.eql(u8, base_name, "error")) "err" else base_name;
                 try writer.print(
-                    \\                {d} => .{{ .@"{s}" = try wl_msg.parse_data(Event.@"{s}", data) }},
+                    \\                {d} => .{{ .@"{s}" = try wl_msg.parse_data(sock, Event.@"{s}", data) }},
                     \\
                 , .{ idx, ev_name, snakeToPascal(ev_name) });
             }
@@ -318,8 +347,8 @@ pub fn generate(allocator: Allocator, xml_filename: []const u8, spec_xml: []cons
 }
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
+    var arena = Arena.init(.default);
+    defer arena.release();
     const allocator = arena.allocator();
 
     var args = std.process.argsWithAllocator(allocator) catch |err| switch (err) {
@@ -478,7 +507,13 @@ const SnakeToPascal = struct {
     ) !void {
         var it = std.mem.splitScalar(u8, self.name, '_');
         while (it.next()) |elem| {
-            try printWithUpperFirstChar(writer, elem);
+            var it_dot = std.mem.splitScalar(u8, elem, '.');
+            var idx: u32 = 0;
+            while (it_dot.next()) |inner| : (idx += 1) {
+                if (idx > 0) try writer.print(".", .{});
+                try printWithUpperFirstChar(writer, inner);
+            }
+            // try printWithUpperFirstChar(writer, elem);
         }
     }
 };
