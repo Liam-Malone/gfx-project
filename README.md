@@ -13,21 +13,28 @@ In the process of attaining a basic window, I realized it would be much easier i
 ## Goals
 
 - [x] Basic Window
+- [x] Vulkan Context
+- [ ] Shader Rendering
+- [ ] Texture Rendering
 - [ ] Input Event Handling
-- [ ] Vulkan Context
 - [ ] 3D Graphics Rendering
 
 
 #### Next Steps
 
-- [ ] DMA Buf usage
-- [ ] Image loading/rendering
-- [ ] Input processing
-- [ ] Vulkan
+- [ ] Vulkan Swapchain
+- [ ] Window Resizing
+- [ ] Wayland File Descriptor Receiving
 
 
 ### Potential Future Goals
 
 - [ ] Abstract Windowing/Input Handling to Standalone Library
 - [ ] Cross Platform Support (Mac/Windows)
-- [ ] Game Engine Based on This Project
+- [ ] Game (/Engine) Based on This Project
+
+
+### Milestones Hit:
+
+- 01:00am - 04/12/2024: First Vulkan Rendered Window
+![First screenshot of the GPU-rendered blank window](./assets/screenshots/first_vk-window.jpeg)
