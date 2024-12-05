@@ -21,6 +21,7 @@ wl_protocols=(linux_dmabuf wayland xdg_decorations xdg_shell)
 root_dir=$(pwd)
 mkdir -p build/bin
 mkdir -p build/tools
+mkdir -p build/shaders
 
 if [ -v release ]; then
     echo "[Release Mode]"
@@ -34,6 +35,15 @@ if [ -v nollvm ]; then build_flags="$build_flags -fno-llvm"; fi
 
 build_flags="$build_flags -O$build_mode"
 
+cd build
+
+# TODO: loop over desired protocols
+if [ -v regen ]; then source $root_dir/scripts/codegen.sh && vk_gen && wl_gen ; fi; 
+if ! [ -f $root_dir/src/generated/vk.zig ]; then vk_gen ; fi
+
+shader_cmd="glslc --target-env=vulkan1.2 -o $root_dir/build/shaders"
+vert_compile="$shader_cmd/vert.spv $root_dir/shaders/simp.vert"
+frag_compile="$shader_cmd/frag.spv $root_dir/shaders/simp.frag"
 
 compile="$ZIG build-exe $build_flags \
 --dep wl_msg \
@@ -43,6 +53,8 @@ compile="$ZIG build-exe $build_flags \
 --dep dmabuf \
 --dep zigimg \
 --dep vulkan \
+--dep vertex_shader \
+--dep fragment_shader \
 -Mroot=$root_dir/src/main.zig $build_flags \
 -Mwl_msg=$root_dir/src/wl_msg.zig $build_flags --dep wl_msg \
 -Mwayland=$root_dir/src/generated/wayland.zig $build_flags --dep wl_msg \
@@ -51,20 +63,22 @@ compile="$ZIG build-exe $build_flags \
 -Mdmabuf=$root_dir/src/generated/linux_dmabuf.zig \
 -Mzigimg=$root_dir/deps/zigimg/zigimg.zig \
 -Mvulkan=$root_dir/src/generated/vk.zig \
+-Mvertex_shader=$root_dir/build/shaders/vert.spv \
+-Mfragment_shader=$root_dir/build/shaders/frag.spv \
+-lc \
+-lvulkan \
 --cache-dir $root_dir/.zig-cache \
 --global-cache-dir $HOME/.cache/zig \
 --name $EXE_NAME \
 "
 
-cd build
-
-if [ -v regen ]; then source $root_dir/scripts/codegen.sh && vk_gen && wl_gen ; fi; 
-if ! [ -f $root_dir/src/generated/vk.zig ]; then vk_gen ; fi
-# TODO: loop over desired protocols
-
-$compile && if [ -v run ]; then ./$EXE_NAME ; fi
+echo "[Compiling Shaders]"
+$vert_compile &&
+$frag_compile &&
+echo "[Compiling Program]" &&
+cd bin && $compile && if [ -v run ]; then ./$EXE_NAME ; fi
 
 if [ -f ./$EXE_NAME.o ]; then rm ./$EXE_NAME.o ; fi
 
-cd ..
+cd $root
 
