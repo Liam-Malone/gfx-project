@@ -427,12 +427,12 @@ pub const ModifierValue = packed struct(u64) {
     };
 
     vendor: Vendor,
-    mod_code: u56,
+    code: u56,
 
     pub fn create(vendor: Vendor, num: u64) ModifierValue {
         return .{
             .vendor = vendor,
-            .mod_code = @truncate(num & 0x00ffffffffffffff),
+            .code = @truncate(num & 0x00ffffffffffffff),
         };
     }
 
