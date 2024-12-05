@@ -35,7 +35,6 @@ pub const WmBase = struct {
 
     /// destroy xdg_wm_base
     pub fn destroy(self: *const WmBase, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending WmBase::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -46,7 +45,6 @@ pub const WmBase = struct {
 
     /// create a positioner object
     pub fn create_positioner(self: *const WmBase, writer: anytype, params: create_positioner_params) !void {
-        log.debug("    Sending WmBase::create_positioner {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -58,7 +56,6 @@ pub const WmBase = struct {
 
     /// create a shell surface from a surface
     pub fn get_xdg_surface(self: *const WmBase, writer: anytype, params: get_xdg_surface_params) !void {
-        log.debug("    Sending WmBase::get_xdg_surface {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -70,7 +67,6 @@ pub const WmBase = struct {
 
     /// respond to a ping event
     pub fn pong(self: *const WmBase, writer: anytype, params: pong_params) !void {
-        log.debug("    Sending WmBase::pong {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -80,9 +76,9 @@ pub const WmBase = struct {
         pub const Ping = struct {
             serial: u32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .ping = try wl_msg.parse_data(sock, Event.Ping, data) },
+                0 => .{ .ping = try wl_msg.parse_data(Event.Ping, data) },
                 else => {
                     log.warn("Unknown wm_base event: {d}", .{op});
                     return error.UnknownEvent;
@@ -163,7 +159,6 @@ pub const Positioner = struct {
 
     /// destroy the xdg_positioner object
     pub fn destroy(self: *const Positioner, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Positioner::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -177,7 +172,6 @@ pub const Positioner = struct {
 
     /// set the size of the to-be positioned rectangle
     pub fn set_size(self: *const Positioner, writer: anytype, params: set_size_params) !void {
-        log.debug("    Sending Positioner::set_size {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -195,7 +189,6 @@ pub const Positioner = struct {
 
     /// set the anchor rectangle within the parent surface
     pub fn set_anchor_rect(self: *const Positioner, writer: anytype, params: set_anchor_rect_params) !void {
-        log.debug("    Sending Positioner::set_anchor_rect {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -207,7 +200,6 @@ pub const Positioner = struct {
 
     /// set anchor rectangle anchor
     pub fn set_anchor(self: *const Positioner, writer: anytype, params: set_anchor_params) !void {
-        log.debug("    Sending Positioner::set_anchor {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -219,7 +211,6 @@ pub const Positioner = struct {
 
     /// set child surface gravity
     pub fn set_gravity(self: *const Positioner, writer: anytype, params: set_gravity_params) !void {
-        log.debug("    Sending Positioner::set_gravity {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -231,7 +222,6 @@ pub const Positioner = struct {
 
     /// set the adjustment to be done when constrained
     pub fn set_constraint_adjustment(self: *const Positioner, writer: anytype, params: set_constraint_adjustment_params) !void {
-        log.debug("    Sending Positioner::set_constraint_adjustment {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -245,7 +235,6 @@ pub const Positioner = struct {
 
     /// set surface position offset
     pub fn set_offset(self: *const Positioner, writer: anytype, params: set_offset_params) !void {
-        log.debug("    Sending Positioner::set_offset {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -255,7 +244,6 @@ pub const Positioner = struct {
 
     /// continuously reconstrain the surface
     pub fn set_reactive(self: *const Positioner, writer: anytype, params: set_reactive_params) !void {
-        log.debug("    Sending Positioner::set_reactive {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -269,7 +257,6 @@ pub const Positioner = struct {
 
     ///
     pub fn set_parent_size(self: *const Positioner, writer: anytype, params: set_parent_size_params) !void {
-        log.debug("    Sending Positioner::set_parent_size {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -281,7 +268,6 @@ pub const Positioner = struct {
 
     /// set parent configure this is a response to
     pub fn set_parent_configure(self: *const Positioner, writer: anytype, params: set_parent_configure_params) !void {
-        log.debug("    Sending Positioner::set_parent_configure {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
@@ -310,7 +296,6 @@ pub const Surface = struct {
 
     /// destroy the xdg_surface
     pub fn destroy(self: *const Surface, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Surface::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -321,7 +306,6 @@ pub const Surface = struct {
 
     /// assign the xdg_toplevel surface role
     pub fn get_toplevel(self: *const Surface, writer: anytype, params: get_toplevel_params) !void {
-        log.debug("    Sending Surface::get_toplevel {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -334,7 +318,6 @@ pub const Surface = struct {
 
     /// assign the xdg_popup surface role
     pub fn get_popup(self: *const Surface, writer: anytype, params: get_popup_params) !void {
-        log.debug("    Sending Surface::get_popup {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -348,7 +331,6 @@ pub const Surface = struct {
 
     /// set the new window geometry
     pub fn set_window_geometry(self: *const Surface, writer: anytype, params: set_window_geometry_params) !void {
-        log.debug("    Sending Surface::set_window_geometry {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -360,7 +342,6 @@ pub const Surface = struct {
 
     /// ack a configure event
     pub fn ack_configure(self: *const Surface, writer: anytype, params: ack_configure_params) !void {
-        log.debug("    Sending Surface::ack_configure {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -370,9 +351,9 @@ pub const Surface = struct {
         pub const Configure = struct {
             serial: u32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
+                0 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
                 else => {
                     log.warn("Unknown surface event: {d}", .{op});
                     return error.UnknownEvent;
@@ -438,7 +419,6 @@ pub const Toplevel = struct {
 
     /// destroy the xdg_toplevel
     pub fn destroy(self: *const Toplevel, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Toplevel::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -449,7 +429,6 @@ pub const Toplevel = struct {
 
     /// set the parent of this surface
     pub fn set_parent(self: *const Toplevel, writer: anytype, params: set_parent_params) !void {
-        log.debug("    Sending Toplevel::set_parent {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -460,7 +439,6 @@ pub const Toplevel = struct {
 
     /// set surface title
     pub fn set_title(self: *const Toplevel, writer: anytype, params: set_title_params) !void {
-        log.debug("    Sending Toplevel::set_title {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -471,7 +449,6 @@ pub const Toplevel = struct {
 
     /// set application ID
     pub fn set_app_id(self: *const Toplevel, writer: anytype, params: set_app_id_params) !void {
-        log.debug("    Sending Toplevel::set_app_id {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -489,7 +466,6 @@ pub const Toplevel = struct {
 
     /// show the window menu
     pub fn show_window_menu(self: *const Toplevel, writer: anytype, params: show_window_menu_params) !void {
-        log.debug("    Sending Toplevel::show_window_menu {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -503,7 +479,6 @@ pub const Toplevel = struct {
 
     /// start an interactive move
     pub fn move(self: *const Toplevel, writer: anytype, params: move_params) !void {
-        log.debug("    Sending Toplevel::move {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -519,7 +494,6 @@ pub const Toplevel = struct {
 
     /// start an interactive resize
     pub fn resize(self: *const Toplevel, writer: anytype, params: resize_params) !void {
-        log.debug("    Sending Toplevel::resize {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -531,7 +505,6 @@ pub const Toplevel = struct {
 
     /// set the maximum size
     pub fn set_max_size(self: *const Toplevel, writer: anytype, params: set_max_size_params) !void {
-        log.debug("    Sending Toplevel::set_max_size {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -543,7 +516,6 @@ pub const Toplevel = struct {
 
     /// set the minimum size
     pub fn set_min_size(self: *const Toplevel, writer: anytype, params: set_min_size_params) !void {
-        log.debug("    Sending Toplevel::set_min_size {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -553,7 +525,6 @@ pub const Toplevel = struct {
 
     /// maximize the window
     pub fn set_maximized(self: *const Toplevel, writer: anytype, params: set_maximized_params) !void {
-        log.debug("    Sending Toplevel::set_maximized {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -563,7 +534,6 @@ pub const Toplevel = struct {
 
     /// unmaximize the window
     pub fn unset_maximized(self: *const Toplevel, writer: anytype, params: unset_maximized_params) !void {
-        log.debug("    Sending Toplevel::unset_maximized {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -574,7 +544,6 @@ pub const Toplevel = struct {
 
     /// set the window as fullscreen on an output
     pub fn set_fullscreen(self: *const Toplevel, writer: anytype, params: set_fullscreen_params) !void {
-        log.debug("    Sending Toplevel::set_fullscreen {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -584,7 +553,6 @@ pub const Toplevel = struct {
 
     /// unset the window as fullscreen
     pub fn unset_fullscreen(self: *const Toplevel, writer: anytype, params: unset_fullscreen_params) !void {
-        log.debug("    Sending Toplevel::unset_fullscreen {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -594,7 +562,6 @@ pub const Toplevel = struct {
 
     /// set the window as minimized
     pub fn set_minimized(self: *const Toplevel, writer: anytype, params: set_minimized_params) !void {
-        log.debug("    Sending Toplevel::set_minimized {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -623,12 +590,12 @@ pub const Toplevel = struct {
         pub const WmCapabilities = struct {
             capabilities: []const u8,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
-                1 => .{ .close = try wl_msg.parse_data(sock, Event.Close, data) },
-                2 => .{ .configure_bounds = try wl_msg.parse_data(sock, Event.ConfigureBounds, data) },
-                3 => .{ .wm_capabilities = try wl_msg.parse_data(sock, Event.WmCapabilities, data) },
+                0 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
+                1 => .{ .close = try wl_msg.parse_data(Event.Close, data) },
+                2 => .{ .configure_bounds = try wl_msg.parse_data(Event.ConfigureBounds, data) },
+                3 => .{ .wm_capabilities = try wl_msg.parse_data(Event.WmCapabilities, data) },
                 else => {
                     log.warn("Unknown toplevel event: {d}", .{op});
                     return error.UnknownEvent;
@@ -652,7 +619,6 @@ pub const Popup = struct {
 
     /// remove xdg_popup interface
     pub fn destroy(self: *const Popup, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Popup::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -666,7 +632,6 @@ pub const Popup = struct {
 
     /// make the popup take an explicit grab
     pub fn grab(self: *const Popup, writer: anytype, params: grab_params) !void {
-        log.debug("    Sending Popup::grab {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -679,7 +644,6 @@ pub const Popup = struct {
 
     /// recalculate the popup's location
     pub fn reposition(self: *const Popup, writer: anytype, params: reposition_params) !void {
-        log.debug("    Sending Popup::reposition {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -702,11 +666,11 @@ pub const Popup = struct {
         pub const Repositioned = struct {
             token: u32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
-                1 => .{ .popup_done = try wl_msg.parse_data(sock, Event.PopupDone, data) },
-                2 => .{ .repositioned = try wl_msg.parse_data(sock, Event.Repositioned, data) },
+                0 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
+                1 => .{ .popup_done = try wl_msg.parse_data(Event.PopupDone, data) },
+                2 => .{ .repositioned = try wl_msg.parse_data(Event.Repositioned, data) },
                 else => {
                     log.warn("Unknown popup event: {d}", .{op});
                     return error.UnknownEvent;

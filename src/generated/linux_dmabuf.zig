@@ -20,7 +20,6 @@ pub const LinuxDmabufV1 = struct {
 
     /// unbind the factory
     pub fn destroy(self: *const LinuxDmabufV1, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending LinuxDmabufV1::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -32,7 +31,6 @@ pub const LinuxDmabufV1 = struct {
 
     /// create a temporary object for buffer parameters
     pub fn create_params(self: *const LinuxDmabufV1, writer: anytype, params: create_params_params) !void {
-        log.debug("    Sending LinuxDmabufV1::create_params {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -43,7 +41,6 @@ pub const LinuxDmabufV1 = struct {
 
     /// get default feedback
     pub fn get_default_feedback(self: *const LinuxDmabufV1, writer: anytype, params: get_default_feedback_params) !void {
-        log.debug("    Sending LinuxDmabufV1::get_default_feedback {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -55,7 +52,6 @@ pub const LinuxDmabufV1 = struct {
 
     /// get feedback for a surface
     pub fn get_surface_feedback(self: *const LinuxDmabufV1, writer: anytype, params: get_surface_feedback_params) !void {
-        log.debug("    Sending LinuxDmabufV1::get_surface_feedback {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -73,10 +69,10 @@ pub const LinuxDmabufV1 = struct {
             modifier_hi: u32,
             modifier_lo: u32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .format = try wl_msg.parse_data(sock, Event.Format, data) },
-                1 => .{ .modifier = try wl_msg.parse_data(sock, Event.Modifier, data) },
+                0 => .{ .format = try wl_msg.parse_data(Event.Format, data) },
+                1 => .{ .modifier = try wl_msg.parse_data(Event.Modifier, data) },
                 else => {
                     log.warn("Unknown linux_dmabuf_v1 event: {d}", .{op});
                     return error.UnknownEvent;
@@ -151,7 +147,6 @@ pub const LinuxBufferParamsV1 = struct {
 
     /// delete this object, used or not
     pub fn destroy(self: *const LinuxBufferParamsV1, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending LinuxBufferParamsV1::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -173,7 +168,6 @@ pub const LinuxBufferParamsV1 = struct {
 
     /// add a dmabuf to the temporary set
     pub fn add(self: *const LinuxBufferParamsV1, writer: anytype, params: add_params) !void {
-        log.debug("    Sending LinuxBufferParamsV1::add {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -191,7 +185,6 @@ pub const LinuxBufferParamsV1 = struct {
 
     /// create a wl_buffer from the given dmabufs
     pub fn create(self: *const LinuxBufferParamsV1, writer: anytype, params: create_params) !void {
-        log.debug("    Sending LinuxBufferParamsV1::create {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -211,7 +204,6 @@ pub const LinuxBufferParamsV1 = struct {
 
     /// immediately create a wl_buffer from the given dmabufs
     pub fn create_immed(self: *const LinuxBufferParamsV1, writer: anytype, params: create_immed_params) !void {
-        log.debug("    Sending LinuxBufferParamsV1::create_immed {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -225,10 +217,10 @@ pub const LinuxBufferParamsV1 = struct {
 
         /// buffer creation failed
         pub const Failed = struct {};
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .created = try wl_msg.parse_data(sock, Event.Created, data) },
-                1 => .{ .failed = try wl_msg.parse_data(sock, Event.Failed, data) },
+                0 => .{ .created = try wl_msg.parse_data(Event.Created, data) },
+                1 => .{ .failed = try wl_msg.parse_data(Event.Failed, data) },
                 else => {
                     log.warn("Unknown linux_buffer_params_v1 event: {d}", .{op});
                     return error.UnknownEvent;
@@ -283,7 +275,6 @@ pub const LinuxDmabufFeedbackV1 = struct {
 
     /// destroy the feedback object
     pub fn destroy(self: *const LinuxDmabufFeedbackV1, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending LinuxDmabufFeedbackV1::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -326,15 +317,15 @@ pub const LinuxDmabufFeedbackV1 = struct {
         pub const TrancheFlags = struct {
             flags: LinuxDmabufFeedbackV1.TrancheFlags,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .done = try wl_msg.parse_data(sock, Event.Done, data) },
-                1 => .{ .format_table = try wl_msg.parse_data(sock, Event.FormatTable, data) },
-                2 => .{ .main_device = try wl_msg.parse_data(sock, Event.MainDevice, data) },
-                3 => .{ .tranche_done = try wl_msg.parse_data(sock, Event.TrancheDone, data) },
-                4 => .{ .tranche_target_device = try wl_msg.parse_data(sock, Event.TrancheTargetDevice, data) },
-                5 => .{ .tranche_formats = try wl_msg.parse_data(sock, Event.TrancheFormats, data) },
-                6 => .{ .tranche_flags = try wl_msg.parse_data(sock, Event.TrancheFlags, data) },
+                0 => .{ .done = try wl_msg.parse_data(Event.Done, data) },
+                1 => .{ .format_table = try wl_msg.parse_data(Event.FormatTable, data) },
+                2 => .{ .main_device = try wl_msg.parse_data(Event.MainDevice, data) },
+                3 => .{ .tranche_done = try wl_msg.parse_data(Event.TrancheDone, data) },
+                4 => .{ .tranche_target_device = try wl_msg.parse_data(Event.TrancheTargetDevice, data) },
+                5 => .{ .tranche_formats = try wl_msg.parse_data(Event.TrancheFormats, data) },
+                6 => .{ .tranche_flags = try wl_msg.parse_data(Event.TrancheFlags, data) },
                 else => {
                     log.warn("Unknown linux_dmabuf_feedback_v1 event: {d}", .{op});
                     return error.UnknownEvent;

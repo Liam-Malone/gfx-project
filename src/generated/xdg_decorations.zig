@@ -20,7 +20,6 @@ pub const DecorationManagerV1 = struct {
 
     /// destroy the decoration manager object
     pub fn destroy(self: *const DecorationManagerV1, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending DecorationManagerV1::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -32,7 +31,6 @@ pub const DecorationManagerV1 = struct {
 
     /// create a new toplevel decoration object
     pub fn get_toplevel_decoration(self: *const DecorationManagerV1, writer: anytype, params: get_toplevel_decoration_params) !void {
-        log.debug("    Sending DecorationManagerV1::get_toplevel_decoration {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
@@ -64,7 +62,6 @@ pub const ToplevelDecorationV1 = struct {
 
     /// destroy the decoration object
     pub fn destroy(self: *const ToplevelDecorationV1, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending ToplevelDecorationV1::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -76,7 +73,6 @@ pub const ToplevelDecorationV1 = struct {
 
     /// set the decoration mode
     pub fn set_mode(self: *const ToplevelDecorationV1, writer: anytype, params: set_mode_params) !void {
-        log.debug("    Sending ToplevelDecorationV1::set_mode {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -86,7 +82,6 @@ pub const ToplevelDecorationV1 = struct {
 
     /// unset the decoration mode
     pub fn unset_mode(self: *const ToplevelDecorationV1, writer: anytype, params: unset_mode_params) !void {
-        log.debug("    Sending ToplevelDecorationV1::unset_mode {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -96,9 +91,9 @@ pub const ToplevelDecorationV1 = struct {
         pub const Configure = struct {
             mode: ToplevelDecorationV1.Mode,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
+                0 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
                 else => {
                     log.warn("Unknown toplevel_decoration_v1 event: {d}", .{op});
                     return error.UnknownEvent;

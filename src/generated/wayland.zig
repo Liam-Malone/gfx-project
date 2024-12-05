@@ -33,7 +33,6 @@ pub const Display = struct {
 
     /// asynchronous roundtrip
     pub fn sync(self: *const Display, writer: anytype, params: sync_params) !void {
-        log.debug("    Sending Display::sync {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -45,7 +44,6 @@ pub const Display = struct {
 
     /// get global registry object
     pub fn get_registry(self: *const Display, writer: anytype, params: get_registry_params) !void {
-        log.debug("    Sending Display::get_registry {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -63,10 +61,10 @@ pub const Display = struct {
         pub const DeleteId = struct {
             id: u32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .@"error" = try wl_msg.parse_data(sock, Event.Error, data) },
-                1 => .{ .delete_id = try wl_msg.parse_data(sock, Event.DeleteId, data) },
+                0 => .{ .@"error" = try wl_msg.parse_data(Event.Error, data) },
+                1 => .{ .delete_id = try wl_msg.parse_data(Event.DeleteId, data) },
                 else => {
                     log.warn("Unknown display event: {d}", .{op});
                     return error.UnknownEvent;
@@ -93,7 +91,6 @@ pub const Registry = struct {
 
     /// bind an object to the display
     pub fn bind(self: *const Registry, writer: anytype, params: bind_params) !void {
-        log.debug("    Sending Registry::bind {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -111,10 +108,10 @@ pub const Registry = struct {
         pub const GlobalRemove = struct {
             name: u32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .global = try wl_msg.parse_data(sock, Event.Global, data) },
-                1 => .{ .global_remove = try wl_msg.parse_data(sock, Event.GlobalRemove, data) },
+                0 => .{ .global = try wl_msg.parse_data(Event.Global, data) },
+                1 => .{ .global_remove = try wl_msg.parse_data(Event.GlobalRemove, data) },
                 else => {
                     log.warn("Unknown registry event: {d}", .{op});
                     return error.UnknownEvent;
@@ -135,9 +132,9 @@ pub const Callback = struct {
         pub const Done = struct {
             callback_data: u32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .done = try wl_msg.parse_data(sock, Event.Done, data) },
+                0 => .{ .done = try wl_msg.parse_data(Event.Done, data) },
                 else => {
                     log.warn("Unknown callback event: {d}", .{op});
                     return error.UnknownEvent;
@@ -160,7 +157,6 @@ pub const Compositor = struct {
 
     /// create new surface
     pub fn create_surface(self: *const Compositor, writer: anytype, params: create_surface_params) !void {
-        log.debug("    Sending Compositor::create_surface {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -172,7 +168,6 @@ pub const Compositor = struct {
 
     /// create new region
     pub fn create_region(self: *const Compositor, writer: anytype, params: create_region_params) !void {
-        log.debug("    Sending Compositor::create_region {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
@@ -200,7 +195,6 @@ pub const ShmPool = struct {
 
     /// create a buffer from the pool
     pub fn create_buffer(self: *const ShmPool, writer: anytype, params: create_buffer_params) !void {
-        log.debug("    Sending ShmPool::create_buffer {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -210,7 +204,6 @@ pub const ShmPool = struct {
 
     /// destroy the pool
     pub fn destroy(self: *const ShmPool, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending ShmPool::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -222,7 +215,6 @@ pub const ShmPool = struct {
 
     /// change the size of the pool mapping
     pub fn resize(self: *const ShmPool, writer: anytype, params: resize_params) !void {
-        log.debug("    Sending ShmPool::resize {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
@@ -490,7 +482,6 @@ pub const Shm = struct {
 
     /// create a shm pool
     pub fn create_pool(self: *const Shm, writer: anytype, params: create_pool_params) !void {
-        log.debug("    Sending Shm::create_pool {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -500,7 +491,6 @@ pub const Shm = struct {
 
     /// release the shm object
     pub fn release(self: *const Shm, writer: anytype, params: release_params) !void {
-        log.debug("    Sending Shm::release {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -510,9 +500,9 @@ pub const Shm = struct {
         pub const Format = struct {
             format: Shm.Format,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .format = try wl_msg.parse_data(sock, Event.Format, data) },
+                0 => .{ .format = try wl_msg.parse_data(Event.Format, data) },
                 else => {
                     log.warn("Unknown shm event: {d}", .{op});
                     return error.UnknownEvent;
@@ -533,7 +523,6 @@ pub const Buffer = struct {
 
     /// destroy a buffer
     pub fn destroy(self: *const Buffer, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Buffer::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -541,9 +530,9 @@ pub const Buffer = struct {
 
         /// compositor releases buffer
         pub const Release = struct {};
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .release = try wl_msg.parse_data(sock, Event.Release, data) },
+                0 => .{ .release = try wl_msg.parse_data(Event.Release, data) },
                 else => {
                     log.warn("Unknown buffer event: {d}", .{op});
                     return error.UnknownEvent;
@@ -577,7 +566,6 @@ pub const DataOffer = struct {
 
     /// accept one of the offered mime types
     pub fn accept(self: *const DataOffer, writer: anytype, params: accept_params) !void {
-        log.debug("    Sending DataOffer::accept {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -591,7 +579,6 @@ pub const DataOffer = struct {
 
     /// request that the data is transferred
     pub fn receive(self: *const DataOffer, writer: anytype, params: receive_params) !void {
-        log.debug("    Sending DataOffer::receive {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -601,7 +588,6 @@ pub const DataOffer = struct {
 
     /// destroy data offer
     pub fn destroy(self: *const DataOffer, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending DataOffer::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -611,7 +597,6 @@ pub const DataOffer = struct {
 
     /// the offer will no longer be used
     pub fn finish(self: *const DataOffer, writer: anytype, params: finish_params) !void {
-        log.debug("    Sending DataOffer::finish {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -625,7 +610,6 @@ pub const DataOffer = struct {
 
     /// set the available/preferred drag-and-drop actions
     pub fn set_actions(self: *const DataOffer, writer: anytype, params: set_actions_params) !void {
-        log.debug("    Sending DataOffer::set_actions {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -647,11 +631,11 @@ pub const DataOffer = struct {
         pub const Action = struct {
             dnd_action: DataDeviceManager.DndAction,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .offer = try wl_msg.parse_data(sock, Event.Offer, data) },
-                1 => .{ .source_actions = try wl_msg.parse_data(sock, Event.SourceActions, data) },
-                2 => .{ .action = try wl_msg.parse_data(sock, Event.Action, data) },
+                0 => .{ .offer = try wl_msg.parse_data(Event.Offer, data) },
+                1 => .{ .source_actions = try wl_msg.parse_data(Event.SourceActions, data) },
+                2 => .{ .action = try wl_msg.parse_data(Event.Action, data) },
                 else => {
                     log.warn("Unknown data_offer event: {d}", .{op});
                     return error.UnknownEvent;
@@ -679,7 +663,6 @@ pub const DataSource = struct {
 
     /// add an offered mime type
     pub fn offer(self: *const DataSource, writer: anytype, params: offer_params) !void {
-        log.debug("    Sending DataSource::offer {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -689,7 +672,6 @@ pub const DataSource = struct {
 
     /// destroy the data source
     pub fn destroy(self: *const DataSource, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending DataSource::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -701,7 +683,6 @@ pub const DataSource = struct {
 
     /// set the available drag-and-drop actions
     pub fn set_actions(self: *const DataSource, writer: anytype, params: set_actions_params) !void {
-        log.debug("    Sending DataSource::set_actions {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -736,14 +717,14 @@ pub const DataSource = struct {
         pub const Action = struct {
             dnd_action: DataDeviceManager.DndAction,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .target = try wl_msg.parse_data(sock, Event.Target, data) },
-                1 => .{ .send = try wl_msg.parse_data(sock, Event.Send, data) },
-                2 => .{ .cancelled = try wl_msg.parse_data(sock, Event.Cancelled, data) },
-                3 => .{ .dnd_drop_performed = try wl_msg.parse_data(sock, Event.DndDropPerformed, data) },
-                4 => .{ .dnd_finished = try wl_msg.parse_data(sock, Event.DndFinished, data) },
-                5 => .{ .action = try wl_msg.parse_data(sock, Event.Action, data) },
+                0 => .{ .target = try wl_msg.parse_data(Event.Target, data) },
+                1 => .{ .send = try wl_msg.parse_data(Event.Send, data) },
+                2 => .{ .cancelled = try wl_msg.parse_data(Event.Cancelled, data) },
+                3 => .{ .dnd_drop_performed = try wl_msg.parse_data(Event.DndDropPerformed, data) },
+                4 => .{ .dnd_finished = try wl_msg.parse_data(Event.DndFinished, data) },
+                5 => .{ .action = try wl_msg.parse_data(Event.Action, data) },
                 else => {
                     log.warn("Unknown data_source event: {d}", .{op});
                     return error.UnknownEvent;
@@ -777,7 +758,6 @@ pub const DataDevice = struct {
 
     /// start drag-and-drop operation
     pub fn start_drag(self: *const DataDevice, writer: anytype, params: start_drag_params) !void {
-        log.debug("    Sending DataDevice::start_drag {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -791,7 +771,6 @@ pub const DataDevice = struct {
 
     /// copy data to the selection
     pub fn set_selection(self: *const DataDevice, writer: anytype, params: set_selection_params) !void {
-        log.debug("    Sending DataDevice::set_selection {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -801,7 +780,6 @@ pub const DataDevice = struct {
 
     /// destroy data device
     pub fn release(self: *const DataDevice, writer: anytype, params: release_params) !void {
-        log.debug("    Sending DataDevice::release {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -843,14 +821,14 @@ pub const DataDevice = struct {
         pub const Selection = struct {
             id: u32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .data_offer = try wl_msg.parse_data(sock, Event.DataOffer, data) },
-                1 => .{ .enter = try wl_msg.parse_data(sock, Event.Enter, data) },
-                2 => .{ .leave = try wl_msg.parse_data(sock, Event.Leave, data) },
-                3 => .{ .motion = try wl_msg.parse_data(sock, Event.Motion, data) },
-                4 => .{ .drop = try wl_msg.parse_data(sock, Event.Drop, data) },
-                5 => .{ .selection = try wl_msg.parse_data(sock, Event.Selection, data) },
+                0 => .{ .data_offer = try wl_msg.parse_data(Event.DataOffer, data) },
+                1 => .{ .enter = try wl_msg.parse_data(Event.Enter, data) },
+                2 => .{ .leave = try wl_msg.parse_data(Event.Leave, data) },
+                3 => .{ .motion = try wl_msg.parse_data(Event.Motion, data) },
+                4 => .{ .drop = try wl_msg.parse_data(Event.Drop, data) },
+                5 => .{ .selection = try wl_msg.parse_data(Event.Selection, data) },
                 else => {
                     log.warn("Unknown data_device event: {d}", .{op});
                     return error.UnknownEvent;
@@ -912,7 +890,6 @@ pub const DataDeviceManager = struct {
 
     /// create a new data source
     pub fn create_data_source(self: *const DataDeviceManager, writer: anytype, params: create_data_source_params) !void {
-        log.debug("    Sending DataDeviceManager::create_data_source {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -926,7 +903,6 @@ pub const DataDeviceManager = struct {
 
     /// create a new data device
     pub fn get_data_device(self: *const DataDeviceManager, writer: anytype, params: get_data_device_params) !void {
-        log.debug("    Sending DataDeviceManager::get_data_device {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
@@ -949,7 +925,6 @@ pub const Shell = struct {
 
     /// create a shell surface from a surface
     pub fn get_shell_surface(self: *const Shell, writer: anytype, params: get_shell_surface_params) !void {
-        log.debug("    Sending Shell::get_shell_surface {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
@@ -1058,7 +1033,6 @@ pub const ShellSurface = struct {
 
     /// respond to a ping event
     pub fn pong(self: *const ShellSurface, writer: anytype, params: pong_params) !void {
-        log.debug("    Sending ShellSurface::pong {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1072,7 +1046,6 @@ pub const ShellSurface = struct {
 
     /// start an interactive move
     pub fn move(self: *const ShellSurface, writer: anytype, params: move_params) !void {
-        log.debug("    Sending ShellSurface::move {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1088,7 +1061,6 @@ pub const ShellSurface = struct {
 
     /// start an interactive resize
     pub fn resize(self: *const ShellSurface, writer: anytype, params: resize_params) !void {
-        log.debug("    Sending ShellSurface::resize {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1098,7 +1070,6 @@ pub const ShellSurface = struct {
 
     /// make the surface a toplevel surface
     pub fn set_toplevel(self: *const ShellSurface, writer: anytype, params: set_toplevel_params) !void {
-        log.debug("    Sending ShellSurface::set_toplevel {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1116,7 +1087,6 @@ pub const ShellSurface = struct {
 
     /// make the surface a transient surface
     pub fn set_transient(self: *const ShellSurface, writer: anytype, params: set_transient_params) !void {
-        log.debug("    Sending ShellSurface::set_transient {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1132,7 +1102,6 @@ pub const ShellSurface = struct {
 
     /// make the surface a fullscreen surface
     pub fn set_fullscreen(self: *const ShellSurface, writer: anytype, params: set_fullscreen_params) !void {
-        log.debug("    Sending ShellSurface::set_fullscreen {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1154,7 +1123,6 @@ pub const ShellSurface = struct {
 
     /// make the surface a popup surface
     pub fn set_popup(self: *const ShellSurface, writer: anytype, params: set_popup_params) !void {
-        log.debug("    Sending ShellSurface::set_popup {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1166,7 +1134,6 @@ pub const ShellSurface = struct {
 
     /// make the surface a maximized surface
     pub fn set_maximized(self: *const ShellSurface, writer: anytype, params: set_maximized_params) !void {
-        log.debug("    Sending ShellSurface::set_maximized {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1178,7 +1145,6 @@ pub const ShellSurface = struct {
 
     /// set surface title
     pub fn set_title(self: *const ShellSurface, writer: anytype, params: set_title_params) !void {
-        log.debug("    Sending ShellSurface::set_title {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1190,7 +1156,6 @@ pub const ShellSurface = struct {
 
     /// set surface class
     pub fn set_class(self: *const ShellSurface, writer: anytype, params: set_class_params) !void {
-        log.debug("    Sending ShellSurface::set_class {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -1212,11 +1177,11 @@ pub const ShellSurface = struct {
 
         /// popup interaction is done
         pub const PopupDone = struct {};
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .ping = try wl_msg.parse_data(sock, Event.Ping, data) },
-                1 => .{ .configure = try wl_msg.parse_data(sock, Event.Configure, data) },
-                2 => .{ .popup_done = try wl_msg.parse_data(sock, Event.PopupDone, data) },
+                0 => .{ .ping = try wl_msg.parse_data(Event.Ping, data) },
+                1 => .{ .configure = try wl_msg.parse_data(Event.Configure, data) },
+                2 => .{ .popup_done = try wl_msg.parse_data(Event.PopupDone, data) },
                 else => {
                     log.warn("Unknown shell_surface event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1250,7 +1215,6 @@ pub const Surface = struct {
 
     /// delete surface
     pub fn destroy(self: *const Surface, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Surface::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1266,7 +1230,6 @@ pub const Surface = struct {
 
     /// set the surface contents
     pub fn attach(self: *const Surface, writer: anytype, params: attach_params) !void {
-        log.debug("    Sending Surface::attach {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1284,7 +1247,6 @@ pub const Surface = struct {
 
     /// mark part of the surface damaged
     pub fn damage(self: *const Surface, writer: anytype, params: damage_params) !void {
-        log.debug("    Sending Surface::damage {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1296,7 +1258,6 @@ pub const Surface = struct {
 
     /// request a frame throttling hint
     pub fn frame(self: *const Surface, writer: anytype, params: frame_params) !void {
-        log.debug("    Sending Surface::frame {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1308,7 +1269,6 @@ pub const Surface = struct {
 
     /// set opaque region
     pub fn set_opaque_region(self: *const Surface, writer: anytype, params: set_opaque_region_params) !void {
-        log.debug("    Sending Surface::set_opaque_region {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1320,7 +1280,6 @@ pub const Surface = struct {
 
     /// set input region
     pub fn set_input_region(self: *const Surface, writer: anytype, params: set_input_region_params) !void {
-        log.debug("    Sending Surface::set_input_region {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1330,7 +1289,6 @@ pub const Surface = struct {
 
     /// commit pending surface state
     pub fn commit(self: *const Surface, writer: anytype, params: commit_params) !void {
-        log.debug("    Sending Surface::commit {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1342,7 +1300,6 @@ pub const Surface = struct {
 
     /// sets the buffer transformation
     pub fn set_buffer_transform(self: *const Surface, writer: anytype, params: set_buffer_transform_params) !void {
-        log.debug("    Sending Surface::set_buffer_transform {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1354,7 +1311,6 @@ pub const Surface = struct {
 
     /// sets the buffer scaling factor
     pub fn set_buffer_scale(self: *const Surface, writer: anytype, params: set_buffer_scale_params) !void {
-        log.debug("    Sending Surface::set_buffer_scale {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1372,7 +1328,6 @@ pub const Surface = struct {
 
     /// mark part of the surface damaged using buffer coordinates
     pub fn damage_buffer(self: *const Surface, writer: anytype, params: damage_buffer_params) !void {
-        log.debug("    Sending Surface::damage_buffer {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1386,7 +1341,6 @@ pub const Surface = struct {
 
     /// set the surface contents offset
     pub fn offset(self: *const Surface, writer: anytype, params: offset_params) !void {
-        log.debug("    Sending Surface::offset {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -1414,12 +1368,12 @@ pub const Surface = struct {
         pub const PreferredBufferTransform = struct {
             transform: Output.Transform,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .enter = try wl_msg.parse_data(sock, Event.Enter, data) },
-                1 => .{ .leave = try wl_msg.parse_data(sock, Event.Leave, data) },
-                2 => .{ .preferred_buffer_scale = try wl_msg.parse_data(sock, Event.PreferredBufferScale, data) },
-                3 => .{ .preferred_buffer_transform = try wl_msg.parse_data(sock, Event.PreferredBufferTransform, data) },
+                0 => .{ .enter = try wl_msg.parse_data(Event.Enter, data) },
+                1 => .{ .leave = try wl_msg.parse_data(Event.Leave, data) },
+                2 => .{ .preferred_buffer_scale = try wl_msg.parse_data(Event.PreferredBufferScale, data) },
+                3 => .{ .preferred_buffer_transform = try wl_msg.parse_data(Event.PreferredBufferTransform, data) },
                 else => {
                     log.warn("Unknown surface event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1485,7 +1439,6 @@ pub const Seat = struct {
 
     /// return pointer object
     pub fn get_pointer(self: *const Seat, writer: anytype, params: get_pointer_params) !void {
-        log.debug("    Sending Seat::get_pointer {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1497,7 +1450,6 @@ pub const Seat = struct {
 
     /// return keyboard object
     pub fn get_keyboard(self: *const Seat, writer: anytype, params: get_keyboard_params) !void {
-        log.debug("    Sending Seat::get_keyboard {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1509,7 +1461,6 @@ pub const Seat = struct {
 
     /// return touch object
     pub fn get_touch(self: *const Seat, writer: anytype, params: get_touch_params) !void {
-        log.debug("    Sending Seat::get_touch {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1519,7 +1470,6 @@ pub const Seat = struct {
 
     /// release the seat object
     pub fn release(self: *const Seat, writer: anytype, params: release_params) !void {
-        log.debug("    Sending Seat::release {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -1535,10 +1485,10 @@ pub const Seat = struct {
         pub const Name = struct {
             name: [:0]const u8,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .capabilities = try wl_msg.parse_data(sock, Event.Capabilities, data) },
-                1 => .{ .name = try wl_msg.parse_data(sock, Event.Name, data) },
+                0 => .{ .capabilities = try wl_msg.parse_data(Event.Capabilities, data) },
+                1 => .{ .name = try wl_msg.parse_data(Event.Name, data) },
                 else => {
                     log.warn("Unknown seat event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1602,7 +1552,6 @@ pub const Pointer = struct {
 
     /// set the pointer surface
     pub fn set_cursor(self: *const Pointer, writer: anytype, params: set_cursor_params) !void {
-        log.debug("    Sending Pointer::set_cursor {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -1612,7 +1561,6 @@ pub const Pointer = struct {
 
     /// release the pointer object
     pub fn release(self: *const Pointer, writer: anytype, params: release_params) !void {
-        log.debug("    Sending Pointer::release {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -1695,19 +1643,19 @@ pub const Pointer = struct {
             axis: Pointer.Axis,
             direction: Pointer.AxisRelativeDirection,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .enter = try wl_msg.parse_data(sock, Event.Enter, data) },
-                1 => .{ .leave = try wl_msg.parse_data(sock, Event.Leave, data) },
-                2 => .{ .motion = try wl_msg.parse_data(sock, Event.Motion, data) },
-                3 => .{ .button = try wl_msg.parse_data(sock, Event.Button, data) },
-                4 => .{ .axis = try wl_msg.parse_data(sock, Event.Axis, data) },
-                5 => .{ .frame = try wl_msg.parse_data(sock, Event.Frame, data) },
-                6 => .{ .axis_source = try wl_msg.parse_data(sock, Event.AxisSource, data) },
-                7 => .{ .axis_stop = try wl_msg.parse_data(sock, Event.AxisStop, data) },
-                8 => .{ .axis_discrete = try wl_msg.parse_data(sock, Event.AxisDiscrete, data) },
-                9 => .{ .axis_value120 = try wl_msg.parse_data(sock, Event.AxisValue120, data) },
-                10 => .{ .axis_relative_direction = try wl_msg.parse_data(sock, Event.AxisRelativeDirection, data) },
+                0 => .{ .enter = try wl_msg.parse_data(Event.Enter, data) },
+                1 => .{ .leave = try wl_msg.parse_data(Event.Leave, data) },
+                2 => .{ .motion = try wl_msg.parse_data(Event.Motion, data) },
+                3 => .{ .button = try wl_msg.parse_data(Event.Button, data) },
+                4 => .{ .axis = try wl_msg.parse_data(Event.Axis, data) },
+                5 => .{ .frame = try wl_msg.parse_data(Event.Frame, data) },
+                6 => .{ .axis_source = try wl_msg.parse_data(Event.AxisSource, data) },
+                7 => .{ .axis_stop = try wl_msg.parse_data(Event.AxisStop, data) },
+                8 => .{ .axis_discrete = try wl_msg.parse_data(Event.AxisDiscrete, data) },
+                9 => .{ .axis_value120 = try wl_msg.parse_data(Event.AxisValue120, data) },
+                10 => .{ .axis_relative_direction = try wl_msg.parse_data(Event.AxisRelativeDirection, data) },
                 else => {
                     log.warn("Unknown pointer event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1744,7 +1692,6 @@ pub const Keyboard = struct {
 
     /// release the keyboard object
     pub fn release(self: *const Keyboard, writer: anytype, params: release_params) !void {
-        log.debug("    Sending Keyboard::release {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -1797,14 +1744,14 @@ pub const Keyboard = struct {
             rate: i32,
             delay: i32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .keymap = try wl_msg.parse_data(sock, Event.Keymap, data) },
-                1 => .{ .enter = try wl_msg.parse_data(sock, Event.Enter, data) },
-                2 => .{ .leave = try wl_msg.parse_data(sock, Event.Leave, data) },
-                3 => .{ .key = try wl_msg.parse_data(sock, Event.Key, data) },
-                4 => .{ .modifiers = try wl_msg.parse_data(sock, Event.Modifiers, data) },
-                5 => .{ .repeat_info = try wl_msg.parse_data(sock, Event.RepeatInfo, data) },
+                0 => .{ .keymap = try wl_msg.parse_data(Event.Keymap, data) },
+                1 => .{ .enter = try wl_msg.parse_data(Event.Enter, data) },
+                2 => .{ .leave = try wl_msg.parse_data(Event.Leave, data) },
+                3 => .{ .key = try wl_msg.parse_data(Event.Key, data) },
+                4 => .{ .modifiers = try wl_msg.parse_data(Event.Modifiers, data) },
+                5 => .{ .repeat_info = try wl_msg.parse_data(Event.RepeatInfo, data) },
                 else => {
                     log.warn("Unknown keyboard event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1825,7 +1772,6 @@ pub const Touch = struct {
 
     /// release the touch object
     pub fn release(self: *const Touch, writer: anytype, params: release_params) !void {
-        log.debug("    Sending Touch::release {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -1880,15 +1826,15 @@ pub const Touch = struct {
             id: i32,
             orientation: f32,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .down = try wl_msg.parse_data(sock, Event.Down, data) },
-                1 => .{ .up = try wl_msg.parse_data(sock, Event.Up, data) },
-                2 => .{ .motion = try wl_msg.parse_data(sock, Event.Motion, data) },
-                3 => .{ .frame = try wl_msg.parse_data(sock, Event.Frame, data) },
-                4 => .{ .cancel = try wl_msg.parse_data(sock, Event.Cancel, data) },
-                5 => .{ .shape = try wl_msg.parse_data(sock, Event.Shape, data) },
-                6 => .{ .orientation = try wl_msg.parse_data(sock, Event.Orientation, data) },
+                0 => .{ .down = try wl_msg.parse_data(Event.Down, data) },
+                1 => .{ .up = try wl_msg.parse_data(Event.Up, data) },
+                2 => .{ .motion = try wl_msg.parse_data(Event.Motion, data) },
+                3 => .{ .frame = try wl_msg.parse_data(Event.Frame, data) },
+                4 => .{ .cancel = try wl_msg.parse_data(Event.Cancel, data) },
+                5 => .{ .shape = try wl_msg.parse_data(Event.Shape, data) },
+                6 => .{ .orientation = try wl_msg.parse_data(Event.Orientation, data) },
                 else => {
                     log.warn("Unknown touch event: {d}", .{op});
                     return error.UnknownEvent;
@@ -1980,7 +1926,6 @@ pub const Output = struct {
 
     /// release the output object
     pub fn release(self: *const Output, writer: anytype, params: release_params) !void {
-        log.debug("    Sending Output::release {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
     pub const Event = union(enum) {
@@ -2028,14 +1973,14 @@ pub const Output = struct {
         pub const Description = struct {
             description: [:0]const u8,
         };
-        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {
+        pub fn parse(op: u32, data: []const u8) !Event {
             return switch (op) {
-                0 => .{ .geometry = try wl_msg.parse_data(sock, Event.Geometry, data) },
-                1 => .{ .mode = try wl_msg.parse_data(sock, Event.Mode, data) },
-                2 => .{ .done = try wl_msg.parse_data(sock, Event.Done, data) },
-                3 => .{ .scale = try wl_msg.parse_data(sock, Event.Scale, data) },
-                4 => .{ .name = try wl_msg.parse_data(sock, Event.Name, data) },
-                5 => .{ .description = try wl_msg.parse_data(sock, Event.Description, data) },
+                0 => .{ .geometry = try wl_msg.parse_data(Event.Geometry, data) },
+                1 => .{ .mode = try wl_msg.parse_data(Event.Mode, data) },
+                2 => .{ .done = try wl_msg.parse_data(Event.Done, data) },
+                3 => .{ .scale = try wl_msg.parse_data(Event.Scale, data) },
+                4 => .{ .name = try wl_msg.parse_data(Event.Name, data) },
+                5 => .{ .description = try wl_msg.parse_data(Event.Description, data) },
                 else => {
                     log.warn("Unknown output event: {d}", .{op});
                     return error.UnknownEvent;
@@ -2056,7 +2001,6 @@ pub const Region = struct {
 
     /// destroy region
     pub fn destroy(self: *const Region, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Region::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -2074,7 +2018,6 @@ pub const Region = struct {
 
     /// add rectangle to region
     pub fn add(self: *const Region, writer: anytype, params: add_params) !void {
-        log.debug("    Sending Region::add {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -2092,7 +2035,6 @@ pub const Region = struct {
 
     /// subtract rectangle from region
     pub fn subtract(self: *const Region, writer: anytype, params: subtract_params) !void {
-        log.debug("    Sending Region::subtract {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
@@ -2113,7 +2055,6 @@ pub const Subcompositor = struct {
 
     /// unbind from the subcompositor interface
     pub fn destroy(self: *const Subcompositor, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Subcompositor::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -2129,7 +2070,6 @@ pub const Subcompositor = struct {
 
     /// give a surface the role sub-surface
     pub fn get_subsurface(self: *const Subcompositor, writer: anytype, params: get_subsurface_params) !void {
-        log.debug("    Sending Subcompositor::get_subsurface {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
@@ -2148,7 +2088,6 @@ pub const Subsurface = struct {
 
     /// remove sub-surface interface
     pub fn destroy(self: *const Subsurface, writer: anytype, params: destroy_params) !void {
-        log.debug("    Sending Subsurface::destroy {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -2162,7 +2101,6 @@ pub const Subsurface = struct {
 
     /// reposition the sub-surface
     pub fn set_position(self: *const Subsurface, writer: anytype, params: set_position_params) !void {
-        log.debug("    Sending Subsurface::set_position {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -2174,7 +2112,6 @@ pub const Subsurface = struct {
 
     /// restack the sub-surface
     pub fn place_above(self: *const Subsurface, writer: anytype, params: place_above_params) !void {
-        log.debug("    Sending Subsurface::place_above {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -2186,7 +2123,6 @@ pub const Subsurface = struct {
 
     /// restack the sub-surface
     pub fn place_below(self: *const Subsurface, writer: anytype, params: place_below_params) !void {
-        log.debug("    Sending Subsurface::place_below {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -2196,7 +2132,6 @@ pub const Subsurface = struct {
 
     /// set sub-surface to synchronized mode
     pub fn set_sync(self: *const Subsurface, writer: anytype, params: set_sync_params) !void {
-        log.debug("    Sending Subsurface::set_sync {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 
@@ -2206,7 +2141,6 @@ pub const Subsurface = struct {
 
     /// set sub-surface to desynchronized mode
     pub fn set_desync(self: *const Subsurface, writer: anytype, params: set_desync_params) !void {
-        log.debug("    Sending Subsurface::set_desync {any}", .{params});
         try wl_msg.write(writer, @TypeOf(params), params, self.id);
     }
 };
