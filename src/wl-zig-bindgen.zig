@@ -151,13 +151,10 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
             }
             try writer.print(
                 \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params) !void {{
-                \\        log.debug("    Sending {s}::{s} {{any}}", .{{ params }});
                 \\        try wl_msg.write(writer, @TypeOf(params), params, self.id);
                 \\    }}
                 \\
             , .{
-                req_name,
-                snakeToPascal(name),
                 req_name,
                 snakeToPascal(name),
                 req_name,
@@ -219,7 +216,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
             event_iter = interface.findChildrenByTag("event"); // reset
             try writer.print(
                 \\
-                \\        pub fn parse(sock: std.posix.socket_t, op: u32, data: []const u8) !Event {{
+                \\        pub fn parse(op: u32, data: []const u8) !Event {{
                 \\            return switch (op) {{
                 \\
             , .{});
@@ -228,7 +225,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
 
                 // const ev_name = if (std.mem.eql(u8, base_name, "error")) "err" else base_name;
                 try writer.print(
-                    \\                {d} => .{{ .@"{s}" = try wl_msg.parse_data(sock, Event.@"{s}", data) }},
+                    \\                {d} => .{{ .@"{s}" = try wl_msg.parse_data(Event.@"{s}", data) }},
                     \\
                 , .{ idx, ev_name, snakeToPascal(ev_name) });
             }
