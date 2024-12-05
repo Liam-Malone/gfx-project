@@ -426,8 +426,8 @@ pub const ModifierValue = packed struct(u64) {
         amlogic = 0x0a,
     };
 
-    vendor: Vendor,
     code: u56,
+    vendor: Vendor,
 
     pub fn create(vendor: Vendor, num: u64) ModifierValue {
         return .{
