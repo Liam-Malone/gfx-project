@@ -73,7 +73,7 @@ pub fn main() !void {
                     switch (interface) {
                         .nil_ev => {}, // Do nothing, this is invalid
                         .display => {
-                            const response_opt = wl.Display.Event.parse(socket.handle, ev.header.op, ev.data) catch |err| blk: {
+                            const response_opt = wl.Display.Event.parse(ev.header.op, ev.data) catch |err| blk: {
                                 app_log.err("Failed to parse wl_display event with err: {s}", .{@errorName(err)});
                                 break :blk null;
                             };
@@ -86,7 +86,7 @@ pub fn main() !void {
                                 };
                         },
                         .registry => {
-                            const action_opt = wl.Registry.Event.parse(socket.handle, ev.header.op, ev.data) catch |err| blk: {
+                            const action_opt = wl.Registry.Event.parse(ev.header.op, ev.data) catch |err| blk: {
                                 app_log.err("Failed to parse wl_registry event with err: {s}", .{@errorName(err)});
                                 break :blk null;
                             };
@@ -135,7 +135,7 @@ pub fn main() !void {
                                 };
                         },
                         else => {
-                            log_unused_event(socket.handle, interface, ev) catch |err| {
+                            log_unused_event(interface, ev) catch |err| {
                                 app_log.err("Failed to log unused event with err: {s}", .{@errorName(err)});
                             };
                         },
@@ -216,6 +216,7 @@ pub fn main() !void {
                 .wayland = wl_state,
                 .running = true,
                 .vulkan = undefined,
+                .gfx_format = undefined,
                 .width = undefined,
                 .height = undefined,
             };
@@ -233,9 +234,16 @@ pub fn main() !void {
         while (!state.wayland.xdg_surface_acked) {
             // Wait for initial xdg_surface config ack
         }
+        const feedback = state.wayland.interface_registry.register(dmab.LinuxDmabufFeedbackV1) catch |err| break :exit err;
+
+        state.wayland.dmabuf.get_surface_feedback(state.wayland.sock_writer, .{
+            .id = feedback.id,
+            .surface = state.wayland.wl_surface.id,
+        }) catch |err| break :exit err;
 
         app_log.debug("Initializing Vulkan State", .{});
         state.vulkan = vk_state: {
+            state.gfx_format.vk_format = .r8g8b8a8_unorm;
             const screen_width: u32 = @intCast(state.width);
             const screen_height: u32 = @intCast(state.height);
 
@@ -271,7 +279,7 @@ pub fn main() !void {
                 },
                 .mip_levels = 1,
                 .array_layers = 1,
-                .format = .b8g8r8a8_unorm,
+                .format = state.gfx_format.vk_format,
                 .tiling = .optimal,
                 .initial_layout = .present_src_khr,
                 .usage = .{
@@ -288,7 +296,7 @@ pub fn main() !void {
             const vk_image_view = vk_dev.wrapper.createImageView(vk_dev.handle, &.{
                 .view_type = .@"2d",
                 .image = vk_image,
-                .format = .b8g8r8a8_unorm,
+                .format = state.gfx_format.vk_format,
                 .subresource_range = .{
                     .aspect_mask = .{ .color_bit = true },
                     .base_mip_level = 0,
@@ -363,7 +371,7 @@ pub fn main() !void {
                 .attachment_count = 1,
                 .p_attachments = &[_]vk.AttachmentDescription{
                     .{
-                        .format = .b8g8r8a8_unorm,
+                        .format = state.gfx_format.vk_format,
                         .samples = .{ .@"1_bit" = true },
                         .load_op = .clear,
                         .store_op = .store,
@@ -566,10 +574,34 @@ pub fn main() !void {
             .buffer_id = wl_buffer_a.id,
             .width = @intCast(state.width),
             .height = @intCast(state.height),
-            .format = @intFromEnum(Drm.Format.xrgb8888),
+            .format = @intFromEnum(state.gfx_format.wl_format),
             .flags = .{},
         }) catch |err| break :exit err;
         state.wayland.wl_buffer[0] = wl_buffer_a;
+
+        const dmabuf_params_b = state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1) catch |err| break :exit err;
+        state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
+            .params_id = dmabuf_params_b.id,
+        }) catch |err| break :exit err;
+
+        dmabuf_params_b.add(state.wayland.sock_writer, .{
+            .fd = state.vulkan.mem_fd,
+            .plane_idx = 0,
+            .offset = @intCast(state.width * state.height * 4),
+            .stride = @intCast(state.width * 4),
+            .modifier_hi = Drm.Modifier.linear.hi(),
+            .modifier_lo = Drm.Modifier.linear.lo(),
+        }) catch |err| break :exit err;
+
+        const wl_buffer_b = state.wayland.interface_registry.register(wl.Buffer) catch |err| break :exit err;
+        dmabuf_params_b.create_immed(state.wayland.sock_writer, .{
+            .buffer_id = wl_buffer_b.id,
+            .width = @intCast(state.width),
+            .height = @intCast(state.height),
+            .format = @intFromEnum(state.gfx_format.wl_format),
+            .flags = .{},
+        }) catch |err| break :exit err;
+        state.wayland.wl_buffer[1] = wl_buffer_a;
 
         state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
@@ -582,46 +614,64 @@ pub fn main() !void {
         state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
         var cur_frame_idx: usize = 0;
+        var prev_time: i64 = std.time.milliTimestamp();
         while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.vulkan.image_count) {
-            // Do stuff
-
-            const clear_value = [_]vk.ClearValue{
-                .{
-                    .color = .{ .float_32 = [_]f32{ 0.1, 0.6, 0.3, 0.7 } },
-                },
-            };
-
-            const vk_dev = state.vulkan.graphics_context.dev;
-            vk_dev.wrapper.queueWaitIdle(state.vulkan.graphics_context.graphics_queue.handle) catch |err| break :exit err;
-
-            const cmd_buf = state.vulkan.cmd_bufs[cur_frame_idx];
-            const graphics_queue = state.vulkan.graphics_context.graphics_queue;
-
-            vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
-                .flags = .{ .one_time_submit_bit = true },
-            }) catch |err| break :exit err;
-
-            vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
-                .render_pass = state.vulkan.render_pass,
-                .framebuffer = state.vulkan.framebuffers[cur_frame_idx],
-                .render_area = .{
-                    .offset = .{ .x = 0, .y = 0 },
-                    .extent = .{ .width = @intCast(state.width), .height = @intCast(state.height) },
-                },
-                .clear_value_count = 1,
-                .p_clear_values = &clear_value,
-            }, .@"inline");
-
-            vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
-            vk_dev.wrapper.endCommandBuffer(cmd_buf) catch |err| break :exit err;
-
-            if (state.running)
-                vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
+            const time = std.time.milliTimestamp();
+            if (time - prev_time > 8) {
+                prev_time = time;
+                const clear_value = [_]vk.ClearValue{
                     .{
-                        .command_buffer_count = 1,
-                        .p_command_buffers = state.vulkan.cmd_bufs.ptr,
+                        .color = .{ .float_32 = [_]f32{ 0.8, 0.8, 0.4, 0.2 } },
                     },
-                }, .null_handle) catch |err| break :exit err;
+                };
+
+                const vk_dev = state.vulkan.graphics_context.dev;
+                vk_dev.wrapper.queueWaitIdle(state.vulkan.graphics_context.graphics_queue.handle) catch |err| break :exit err;
+
+                const cmd_buf = state.vulkan.cmd_bufs[cur_frame_idx];
+                const graphics_queue = state.vulkan.graphics_context.graphics_queue;
+
+                vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
+                    .flags = .{ .one_time_submit_bit = true },
+                }) catch |err| break :exit err;
+
+                vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
+                    .render_pass = state.vulkan.render_pass,
+                    .framebuffer = state.vulkan.framebuffers[cur_frame_idx],
+                    .render_area = .{
+                        .offset = .{ .x = 0, .y = 0 },
+                        .extent = .{ .width = @intCast(state.width), .height = @intCast(state.height) },
+                    },
+                    .clear_value_count = 1,
+                    .p_clear_values = &clear_value,
+                }, .@"inline");
+
+                vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
+                vk_dev.wrapper.endCommandBuffer(cmd_buf) catch |err| break :exit err;
+
+                if (state.running) {
+                    vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
+                        .{
+                            .command_buffer_count = 1,
+                            .p_command_buffers = state.vulkan.cmd_bufs.ptr,
+                        },
+                    }, .null_handle) catch |err| break :exit err;
+
+                    state.wayland.wl_surface.damage(state.wayland.sock_writer, .{
+                        .x = 0,
+                        .y = 0,
+                        .width = state.width,
+                        .height = state.height,
+                    }) catch |err| break :exit err;
+
+                    state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
+                        .buffer = state.wayland.wl_buffer[cur_frame_idx].id,
+                        .x = 0,
+                        .y = 0,
+                    }) catch |err| break :exit err;
+                    state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
+                }
+            }
         }
     } catch |err| { // program err exit path
         app_log.err("Program exiting due to error: {s}", .{@errorName(err)});
@@ -668,9 +718,14 @@ const State = struct {
         pipelines: []vk.Pipeline,
         framebuffers: []vk.Framebuffer,
     };
+    const GfxFormat = struct {
+        vk_format: vk.Format,
+        wl_format: Drm.Format,
+    };
 
     wayland: Wayland,
     vulkan: Vulkan,
+    gfx_format: GfxFormat,
     width: i32,
     height: i32,
     running: bool,
@@ -745,19 +800,11 @@ fn handle_wl_events(state: *State) void {
     const event_iterator = &wl_state.wl_ev_iter;
 
     loop: while (true) {
-        const ev = event_iterator.next() catch |err| blk: {
-            switch (err) {
-                error.RemoteClosed, error.BrokenPipe, error.StreamClosed => {
-                    app_log.err("Wayland Event Thread Encountered Fatal Error: {any}", .{err});
-                    wl_state.socket_closed = true;
-                    state.running = false;
-                    break :loop;
-                },
-                else => {
-                    app_log.err("encountered err: {any}", .{err});
-                },
-            }
-            break :blk Event.nil;
+        const ev = event_iterator.next() catch |err| {
+            app_log.err("Wayland Event Thread Encountered Fatal Error: {any}", .{err});
+            wl_state.socket_closed = true;
+            state.running = false;
+            break :loop;
         } orelse Event.nil;
         const interface = state.wayland.interface_registry.get(ev.header.id) orelse .nil_ev;
         const res = res: {
@@ -766,7 +813,7 @@ fn handle_wl_events(state: *State) void {
                     // nil event handle
                 },
                 .xdg_wm_base => {
-                    const action_opt: ?xdg.WmBase.Event = xdg.WmBase.Event.parse(wl_state.wl_socket.handle, ev.header.op, ev.data) catch null;
+                    const action_opt: ?xdg.WmBase.Event = xdg.WmBase.Event.parse(ev.header.op, ev.data) catch null;
                     if (action_opt) |action|
                         switch (action) {
                             .ping => |ping| {
@@ -777,7 +824,7 @@ fn handle_wl_events(state: *State) void {
                         };
                 },
                 .xdg_surface => {
-                    const action_opt: ?xdg.Surface.Event = xdg.Surface.Event.parse(wl_state.wl_socket.handle, ev.header.op, ev.data) catch null;
+                    const action_opt: ?xdg.Surface.Event = xdg.Surface.Event.parse(ev.header.op, ev.data) catch null;
                     if (action_opt) |action|
                         switch (action) {
                             .configure => |configure| {
@@ -788,7 +835,7 @@ fn handle_wl_events(state: *State) void {
                         };
                 },
                 .xdg_toplevel => {
-                    const action_opt: ?xdg.Toplevel.Event = xdg.Toplevel.Event.parse(wl_state.wl_socket.handle, ev.header.op, ev.data) catch null;
+                    const action_opt: ?xdg.Toplevel.Event = xdg.Toplevel.Event.parse(ev.header.op, ev.data) catch null;
                     if (action_opt) |action|
                         switch (action) {
                             .configure => |configure| {
@@ -796,14 +843,14 @@ fn handle_wl_events(state: *State) void {
                                 state.height = configure.height;
                             },
                             .close => { //  Empty struct, nothing to capture
-                                app_log.info("server is closing this toplevel", .{});
+                                app_log.info("Toplevel Received Close Signal", .{});
                                 wl_state.xdg_toplevel.?.destroy(wl_state.sock_writer, .{}) catch |err| break :res err;
                                 wl_state.xdg_toplevel = null;
                                 state.running = false;
                                 break;
                             },
                             else => {
-                                log_unused_event(wl_state.wl_socket.handle, interface, ev) catch |err| {
+                                log_unused_event(interface, ev) catch |err| {
                                     wl_log.warn("Failed to log event from Interface :: {s}", .{@tagName(interface)});
                                     break :res err;
                                 };
@@ -811,52 +858,67 @@ fn handle_wl_events(state: *State) void {
                         };
                 },
                 .dmabuf_feedback => {
-                    const feedback = dmab.LinuxDmabufFeedbackV1.Event.parse(wl_state.wl_socket.handle, ev.header.op, ev.data) catch |err| {
+                    const feedback = dmab.LinuxDmabufFeedbackV1.Event.parse(ev.header.op, ev.data) catch |err| {
                         wl_log.warn("Failed to log event from Interface :: {s}", .{@tagName(interface)});
                         break :res err;
                     };
 
                     switch (feedback) {
                         .format_table => |table| {
-                            const table_data = std.posix.mmap(
-                                null,
-                                table.size,
-                                std.posix.PROT.READ,
-                                .{
-                                    .TYPE = .PRIVATE,
-                                },
-                                table.fd,
-                                0,
-                            ) catch |err| {
-                                app_log.err("DMABuf Feedback :: Failed to Map Supported Formats Table :: {s}", .{@errorName(err)});
-                                break :res err;
-                            };
-                            // 16-byte pairs
-                            // 32-bit uint format
-                            // 4 bytes padding
-                            // 64-bit uint modifier
-                            app_log.info(" :: Received Format-Modifier Table From Compositor ::", .{});
+                            if (event_iterator.next_fd()) |fd| {
+                                const table_data = std.posix.mmap(
+                                    null,
+                                    table.size,
+                                    std.posix.PROT.READ,
+                                    .{
+                                        .TYPE = .PRIVATE,
+                                    },
+                                    fd,
+                                    0,
+                                ) catch |err| {
+                                    app_log.err("DMABuf Feedback :: Failed to Map Supported Formats Table :: {s}", .{@errorName(err)});
+                                    break :res err;
+                                };
+                                // 16-byte pairs
+                                // 32-bit uint format
+                                // 4 bytes padding
+                                // 64-bit uint modifier
+                                app_log.info(" :: Received Format-Modifier Table From Compositor ::", .{});
 
-                            var row_iter = std.mem.window(u8, table_data, 16, 16);
-                            while (row_iter.next()) |row| {
-                                const format = std.mem.bytesToValue(u32, row[0..4]);
-                                const modifier = std.mem.bytesToValue(u64, row[8..16]);
+                                var row_iter = std.mem.window(u8, table_data, 16, 16);
+                                while (row_iter.next()) |row| {
+                                    const format = std.mem.bytesToValue(u32, row[0..4]);
+                                    const mod = std.mem.bytesToValue(u64, row[8..16]);
+                                    const mod_val: Drm.ModifierValue = @bitCast(mod);
 
-                                const format_tag = std.meta.intToEnum(Drm.Format, format) catch null;
-                                const modifier_tag = std.meta.intToEnum(Drm.Modifier, modifier) catch null;
+                                    const format_tag = std.meta.intToEnum(Drm.Format, format) catch null;
+                                    const mod_tag = std.meta.intToEnum(Drm.Modifier, mod) catch null;
+                                    const mv_tag = std.meta.intToEnum(Drm.ModifierValue.Vendor, @as(u8, @intFromEnum(mod_val.vendor))) catch null;
 
-                                const format_name = if (format_tag) |tag| @tagName(tag) else "Unknown";
-                                const modifier_name = if (modifier_tag) |tag| @tagName(tag) else "Unknown";
-                                app_log.info("Format: {s},\tModifier: {s}", .{ format_name, modifier_name });
+                                    const format_name = if (format_tag) |tag| @tagName(tag) else "Unknown";
+                                    const mod_name = if (mod_tag) |tag| @tagName(tag) else "Unknown";
+                                    const mv_name = if (mv_tag) |tag| @tagName(tag) else "Unknown";
+                                    app_log.info("Format: {s} ({d}),\tVendor: {s} ({d}),\tModifier: {s} ({d})", .{
+                                        format_name,
+                                        format,
+                                        mv_name,
+                                        @as(u8, @intFromEnum(mod_val.vendor)),
+                                        mod_name,
+                                        mod_val.code,
+                                    });
+
+                                    state.gfx_format.wl_format = .argb8888;
+                                }
                             }
+                            app_log.info("DmaBuf Feedback :: Received Format Table Event With No File Descriptor", .{});
                         },
                         else => {
-                            log_unused_event(wl_state.wl_socket.handle, interface, ev) catch |err| break :res err;
+                            log_unused_event(interface, ev) catch |err| break :res err;
                         },
                     }
                 },
                 else => {
-                    log_unused_event(wl_state.wl_socket.handle, interface, ev) catch |err| break :res err;
+                    log_unused_event(interface, ev) catch |err| break :res err;
                 },
             }
         } catch |err| {
@@ -999,11 +1061,11 @@ const InterfaceRegistry = struct {
     }
 };
 
-fn log_unused_event(sock: std.posix.socket_t, interface: InterfaceType, event: Event) !void {
+fn log_unused_event(interface: InterfaceType, event: Event) !void {
     switch (interface) {
         .nil_ev => app_log.debug("Encountered unused nil event", .{}),
         .display => {
-            const parsed = try wl.Display.Event.parse(sock, event.header.op, event.data);
+            const parsed = try wl.Display.Event.parse(event.header.op, event.data);
             switch (parsed) {
                 .@"error" => |err| log_display_err(err),
                 else => {
@@ -1012,10 +1074,10 @@ fn log_unused_event(sock: std.posix.socket_t, interface: InterfaceType, event: E
             }
         },
         .registry => {
-            app_log.debug("Unused event: {any}", .{try wl.Registry.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Registry.Event.parse(event.header.op, event.data)});
         },
         .wl_seat => {
-            const ev = try wl.Seat.Event.parse(sock, event.header.op, event.data);
+            const ev = try wl.Seat.Event.parse(event.header.op, event.data);
             switch (ev) {
                 .name => |name| {
                     app_log.debug("Unused wl_seat event: wl.Seat Name {s}", .{name.name});
@@ -1033,38 +1095,38 @@ fn log_unused_event(sock: std.posix.socket_t, interface: InterfaceType, event: E
             }
         },
         .wl_surface => {
-            app_log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Surface.Event.parse(event.header.op, event.data)});
         },
         .wl_buffer => {
-            app_log.debug("Unused event: {any}", .{try wl.Buffer.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Buffer.Event.parse(event.header.op, event.data)});
         },
         .compositor => unreachable, // wl_compositor has no events
         .wl_callback => {
-            app_log.debug("Unused event: {any}", .{try wl.Callback.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try wl.Callback.Event.parse(event.header.op, event.data)});
         },
         .xdg_wm_base => {
-            app_log.debug("Unused event: {any}", .{try xdg.WmBase.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.WmBase.Event.parse(event.header.op, event.data)});
         },
         .xdg_surface => {
-            app_log.debug("Unused event: {any}", .{try xdg.Surface.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.Surface.Event.parse(event.header.op, event.data)});
         },
         .xdg_toplevel => {
-            app_log.debug("Unused event: {any}", .{try xdg.Toplevel.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdg.Toplevel.Event.parse(event.header.op, event.data)});
         },
         .xdg_decoration_manager => unreachable, // xdg_decoration_manager has no events
         .xdg_decoration_toplevel => {
-            app_log.debug("Unused event: {any}", .{try xdgd.ToplevelDecorationV1.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try xdgd.ToplevelDecorationV1.Event.parse(event.header.op, event.data)});
         },
         .dmabuf => {
-            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufV1.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufV1.Event.parse(event.header.op, event.data)});
         },
         .dmabuf_params => {
-            app_log.debug("Unused event: {any}", .{try dmab.LinuxBufferParamsV1.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}", .{try dmab.LinuxBufferParamsV1.Event.parse(event.header.op, event.data)});
         },
         .dmabuf_feedback => {
             app_log.info("Header Size :: {d}", .{Header.Size});
             app_log.info("DMABuf Feedback: Header :: op={d}, size={d}", .{ event.header.op, event.header.msg_size });
-            app_log.debug("Unused event: {any}", .{try dmab.LinuxDmabufFeedbackV1.Event.parse(sock, event.header.op, event.data)});
+            app_log.debug("Unused event: {any}, with no fd", .{try dmab.LinuxDmabufFeedbackV1.Event.parse(event.header.op, event.data)});
         },
     }
 }
@@ -1091,9 +1153,6 @@ const Event = struct {
 /// Contains Data Stream & Shifting Buffer
 fn EventIt(comptime buf_size: comptime_int) type {
     return struct {
-        stream: std.net.Stream,
-        buf: ShiftBuf = .{},
-
         /// This solves the problem of reading a partial header or partial data stream
         /// Buffer -> [ _ _ _ _ _ ]
         /// Fill =>   [ x y z w x ]
@@ -1118,7 +1177,20 @@ fn EventIt(comptime buf_size: comptime_int) type {
                 sb.start = 0;
             }
         };
+
+        const FdQueue = struct {
+            data: [Len]std.posix.fd_t = undefined,
+            read: usize = 0,
+            write: usize = 0,
+            pub const Len = 64;
+        };
+
         const Iterator = @This();
+
+        stream: std.net.Stream,
+        buf: ShiftBuf = .{},
+        fd_queue: FdQueue = .{},
+        fd_buf: [FdQueue.Len * @sizeOf(std.posix.fd_t)]u8 = undefined,
 
         pub fn init(stream: std.net.Stream) Iterator {
             return .{
@@ -1129,11 +1201,16 @@ fn EventIt(comptime buf_size: comptime_int) type {
         /// Calls `.shift()` on data buffer, and reads in new bytes from stream
         fn load_events(iter: *Iterator) !void {
             wl_log.info("  Event Iterator :: Loading Events", .{});
-            iter.buf.shift();
-            const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]); // This does not hang
-            if (bytes_read == 0) {
-                return error.RemoteClosed;
+
+            if (receive_cmsg(iter.stream.handle, &iter.fd_buf)) |fd| {
+                const idx = iter.fd_queue.write % FdQueue.Len;
+                iter.fd_queue.data[idx] = fd;
+                iter.fd_queue.write += 1;
             }
+
+            iter.buf.shift();
+
+            const bytes_read: usize = try iter.stream.read(iter.buf.data[iter.buf.end..]);
             iter.buf.end += bytes_read;
         }
 
@@ -1158,11 +1235,12 @@ fn EventIt(comptime buf_size: comptime_int) type {
             SocketNotConnected,
             Canceled,
         };
+
         /// Get next message from stored buffer
         /// When the buffer is filled, the follwing call to `.next()` will overwrite all messages that have already been read
         ///
         /// See: `ShiftBuf.shift()`
-        pub fn next(iter: *Iterator) IteratorErrors!?Event {
+        pub fn next(iter: *Iterator) !?Event {
             while (true) {
                 const buffered_ev: ?Event = blk: {
                     const header_end = iter.buf.start + Header.Size;
@@ -1207,25 +1285,75 @@ fn EventIt(comptime buf_size: comptime_int) type {
 
                 if (data_in_stream) {
                     iter.load_events() catch |err| {
-                        switch (err) {
-                            error.RemoteClosed => {
-                                wl_log.warn("  Event Iterator :: {s}", .{@errorName(err)});
-                                return err;
-                            },
-                            error.BrokenPipe => {
-                                wl_log.warn("  Event Iterator :: {s}", .{@errorName(err)});
-                                return err;
-                            },
-                            else => wl_log.warn("  Event Iterator :: {s}", .{@errorName(err)}),
-                        }
-                        return null;
+                        wl_log.err("  Event Iterator :: {s}", .{@errorName(err)});
+                        return err;
                     };
                 } else {
                     return null;
                 }
             }
         }
+
+        pub fn next_fd(iter: *Iterator) ?std.posix.fd_t {
+            if (iter.fd_queue.read == iter.fd_queue.write)
+                return null;
+
+            defer iter.fd_queue.read += 1;
+            return iter.fd_queue.data[iter.fd_queue.read];
+        }
+        pub fn peek_fd(iter: *Iterator) ?std.posix.fd_t {
+            if (iter.fd_queue.read == iter.fd_queue.write)
+                return null;
+
+            return iter.fd_queue.data[iter.fd_queue.read];
+        }
     };
+}
+
+const cmsg = wl_msg.cmsg;
+const SCM_RIGHTS = 0x01;
+fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?wl_msg.FileDescriptor {
+    var cmsg_buf: [cmsg(wl_msg.FileDescriptor).Size * 12]u8 = undefined;
+
+    var iov = [_]std.posix.iovec{
+        .{
+            .base = buf.ptr,
+            .len = buf.len,
+        },
+    };
+
+    var msg: std.posix.msghdr = .{
+        .name = null,
+        .namelen = 0,
+        .iov = &iov,
+        .iovlen = 1,
+        .control = &cmsg_buf,
+        .controllen = cmsg_buf.len,
+        .flags = 0,
+    };
+
+    const rc: usize = std.os.linux.recvmsg(socket, &msg, std.os.linux.MSG.PEEK | std.os.linux.MSG.DONTWAIT);
+
+    const res = res: {
+        if (@as(isize, @bitCast(rc)) < 0) {
+            const err = std.posix.errno(rc);
+            wl_log.err("recvmsg failed with err: {s}", .{@tagName(err)});
+            break :res null;
+        } else {
+            var offset: usize = 0;
+            while (offset + 24 <= msg.controllen) {
+                const ctrl_buf: [*]u8 = @ptrCast(msg.control.?);
+                const ctrl_msg: *align(1) cmsg(wl_msg.FileDescriptor) = @ptrCast(@alignCast(ctrl_buf[offset..][0..64]));
+
+                if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == SCM_RIGHTS)
+                    break :res ctrl_msg.data;
+            }
+            offset += 1;
+        }
+        break :res null;
+    };
+
+    return res;
 }
 
 // TESTS
