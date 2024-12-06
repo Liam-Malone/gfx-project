@@ -245,8 +245,7 @@ pub fn cmsg(comptime T: type) type {
         data: T,
         __padding: std.meta.Int(.unsigned, padded_bit_count) = 0,
 
-        pub const padded_bits = padded_bit_count;
-        pub const padded_bytes = padded_bit_count / 8;
+        pub const Padding = padded_bit_count / 8;
         pub const Size = msg_size;
     };
 }

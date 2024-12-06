@@ -617,6 +617,7 @@ pub fn main() !void {
         var prev_time: i64 = std.time.milliTimestamp();
         while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.vulkan.image_count) {
             const time = std.time.milliTimestamp();
+
             if (time - prev_time > 8) {
                 prev_time = time;
                 const clear_value = [_]vk.ClearValue{
@@ -807,7 +808,7 @@ fn handle_wl_events(state: *State) void {
             break :loop;
         } orelse Event.nil;
         const interface = state.wayland.interface_registry.get(ev.header.id) orelse .nil_ev;
-        const res = res: {
+        _ = res: {
             switch (interface) {
                 .nil_ev => {
                     // nil event handle
@@ -858,10 +859,7 @@ fn handle_wl_events(state: *State) void {
                         };
                 },
                 .dmabuf_feedback => {
-                    const feedback = dmab.LinuxDmabufFeedbackV1.Event.parse(ev.header.op, ev.data) catch |err| {
-                        wl_log.warn("Failed to log event from Interface :: {s}", .{@tagName(interface)});
-                        break :res err;
-                    };
+                    const feedback = dmab.LinuxDmabufFeedbackV1.Event.parse(ev.header.op, ev.data) catch |err| break :res err;
 
                     switch (feedback) {
                         .format_table => |table| {
@@ -879,12 +877,11 @@ fn handle_wl_events(state: *State) void {
                                     app_log.err("DMABuf Feedback :: Failed to Map Supported Formats Table :: {s}", .{@errorName(err)});
                                     break :res err;
                                 };
+
                                 // 16-byte pairs
                                 // 32-bit uint format
                                 // 4 bytes padding
                                 // 64-bit uint modifier
-                                app_log.info(" :: Received Format-Modifier Table From Compositor ::", .{});
-
                                 var row_iter = std.mem.window(u8, table_data, 16, 16);
                                 while (row_iter.next()) |row| {
                                     const format = std.mem.bytesToValue(u32, row[0..4]);
@@ -910,7 +907,6 @@ fn handle_wl_events(state: *State) void {
                                     state.gfx_format.wl_format = .argb8888;
                                 }
                             }
-                            app_log.info("DmaBuf Feedback :: Received Format Table Event With No File Descriptor", .{});
                         },
                         else => {
                             log_unused_event(interface, ev) catch |err| break :res err;
@@ -924,7 +920,6 @@ fn handle_wl_events(state: *State) void {
         } catch |err| {
             app_log.err("Wayland Event Thread Encountered Error: {s}", .{@errorName(err)});
         };
-        _ = res;
     }
 }
 
@@ -1340,8 +1335,10 @@ fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?wl_msg.FileDescriptor {
             wl_log.err("recvmsg failed with err: {s}", .{@tagName(err)});
             break :res null;
         } else {
+            const cmsg_t = cmsg(std.posix.fd_t);
+            const cmsg_size = cmsg_t.Size - cmsg_t.Padding;
             var offset: usize = 0;
-            while (offset + 24 <= msg.controllen) {
+            while (offset + cmsg_size <= msg.controllen) {
                 const ctrl_buf: [*]u8 = @ptrCast(msg.control.?);
                 const ctrl_msg: *align(1) cmsg(wl_msg.FileDescriptor) = @ptrCast(@alignCast(ctrl_buf[offset..][0..64]));
 
