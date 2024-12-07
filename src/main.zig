@@ -184,8 +184,8 @@ pub fn main() !void {
                 const xdg_toplevel = try interface_registry.register(xdg.Toplevel);
                 try xdg_surface.get_toplevel(sock_writer, .{ .id = xdg_toplevel.id });
 
-                try xdg_toplevel.set_app_id(sock_writer, .{ .app_id = "simp-client" });
-                try xdg_toplevel.set_title(sock_writer, .{ .title = "Simp Client" });
+                try xdg_toplevel.set_app_id(sock_writer, .{ .app_id = "simple-client" });
+                try xdg_toplevel.set_title(sock_writer, .{ .title = "Simple Client" });
 
                 try wl_surface.commit(sock_writer, .{});
                 const decoration_toplevel = try interface_registry.register(xdgd.ToplevelDecorationV1);
@@ -217,8 +217,8 @@ pub fn main() !void {
                 .running = true,
                 .vulkan = undefined,
                 .gfx_format = undefined,
-                .width = undefined,
-                .height = undefined,
+                .width = 800,
+                .height = 600,
             };
         };
 
@@ -250,11 +250,17 @@ pub fn main() !void {
             // Create Vulkan Graphics Context
             app_log.debug("Creating Graphics Context", .{});
             const graphics_context = graphics_context: {
-                break :graphics_context GraphicsContext.init(arena.allocator(), "Simp Window", .{ .width = screen_width, .height = screen_height }, false);
+                break :graphics_context GraphicsContext.init(arena.allocator(), "Simple Window", .{ .width = screen_width, .height = screen_height }, false);
             } catch |err| {
                 app_log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
                 break :exit error.InitializationFailed;
             };
+
+            // TODO:
+            // -[ ] Move most of this to GraphicsContext init
+            // -[ ] Make pipeling creation function for GraphicsContext
+            // -[ ] Recreate pipeline on window resize events
+
             const vk_dev = graphics_context.dev;
 
             const vert = vk_dev.createShaderModule(&.{
@@ -280,7 +286,7 @@ pub fn main() !void {
                 .mip_levels = 1,
                 .array_layers = 1,
                 .format = state.gfx_format.vk_format,
-                .tiling = .optimal,
+                .tiling = .linear,
                 .initial_layout = .present_src_khr,
                 .usage = .{
                     .transfer_src_bit = true,
@@ -378,7 +384,7 @@ pub fn main() !void {
                         .stencil_load_op = .dont_care,
                         .stencil_store_op = .dont_care,
                         .initial_layout = .undefined,
-                        .final_layout = .transfer_src_optimal,
+                        .final_layout = .present_src_khr,
                     },
                 },
                 .subpass_count = 1,
@@ -504,23 +510,29 @@ pub fn main() !void {
                 }, null) catch |err| break :exit err;
             }
 
-            for (cmd_bufs) |cmd_buf| {
+            for (cmd_bufs, 0..) |cmd_buf, idx| {
                 try vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
-                    .flags = .{ .one_time_submit_bit = true },
+                    .flags = .{},
                 });
 
                 const clear_value = [_]vk.ClearValue{.{
                     .color = .{
-                        .float_32 = [_]f32{ 1.0, 1.0, 1.0, 1.0 }, // white
+                        .float_32 = [_]f32{ 0.1, 0.3, 0.3, 1.0 }, // white
                     },
                 }};
 
                 vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
                     .render_pass = render_pass,
-                    .framebuffer = framebuffers[0],
+                    .framebuffer = framebuffers[idx],
                     .render_area = .{
-                        .offset = .{ .x = 0, .y = 0 },
-                        .extent = .{ .width = screen_width, .height = screen_height },
+                        .offset = .{
+                            .x = 0,
+                            .y = 0,
+                        },
+                        .extent = .{
+                            .width = screen_width,
+                            .height = screen_height,
+                        },
                     },
                     .clear_value_count = 1,
                     .p_clear_values = &clear_value,
@@ -538,6 +550,7 @@ pub fn main() !void {
                 },
             }, .null_handle) catch |err| break :exit err;
 
+            app_log.info("Initial Render Dimensions: {d}x{d}", .{ state.width, state.height });
             // Return constructed state
             break :vk_state .{
                 .graphics_context = graphics_context,
@@ -613,48 +626,66 @@ pub fn main() !void {
 
         state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
+        var red_val: f32 = 0.0;
+        var blu_val: f32 = 0.0;
+        var step: f32 = 0.01;
         var cur_frame_idx: usize = 0;
         var prev_time: i64 = std.time.milliTimestamp();
         while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.vulkan.image_count) {
             const time = std.time.milliTimestamp();
 
-            if (time - prev_time > 8) {
+            if (time - prev_time > 26) {
+                red_val += step;
+                blu_val += step;
+                if (red_val >= 1.0 or red_val <= 0.0) {
+                    step = -step;
+                }
+
                 prev_time = time;
-                const clear_value = [_]vk.ClearValue{
-                    .{
-                        .color = .{ .float_32 = [_]f32{ 0.8, 0.8, 0.4, 0.2 } },
-                    },
-                };
 
                 const vk_dev = state.vulkan.graphics_context.dev;
                 vk_dev.wrapper.queueWaitIdle(state.vulkan.graphics_context.graphics_queue.handle) catch |err| break :exit err;
 
-                const cmd_buf = state.vulkan.cmd_bufs[cur_frame_idx];
+                const cmd_buf = &state.vulkan.cmd_bufs[cur_frame_idx];
                 const graphics_queue = state.vulkan.graphics_context.graphics_queue;
 
-                vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
-                    .flags = .{ .one_time_submit_bit = true },
+                const clear_value = [_]vk.ClearValue{
+                    .{
+                        .color = .{
+                            .float_32 = [_]f32{ red_val, 0.3, blu_val, 1.0 },
+                        },
+                    },
+                };
+
+                vk_dev.wrapper.beginCommandBuffer(cmd_buf.*, &.{
+                    .flags = .{},
                 }) catch |err| break :exit err;
 
-                vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
+                vk_dev.wrapper.cmdBeginRenderPass(cmd_buf.*, &.{
                     .render_pass = state.vulkan.render_pass,
                     .framebuffer = state.vulkan.framebuffers[cur_frame_idx],
                     .render_area = .{
-                        .offset = .{ .x = 0, .y = 0 },
-                        .extent = .{ .width = @intCast(state.width), .height = @intCast(state.height) },
+                        .offset = .{
+                            .x = 0,
+                            .y = 0,
+                        },
+                        .extent = .{
+                            .width = @intCast(state.width),
+                            .height = @intCast(state.height),
+                        },
                     },
                     .clear_value_count = 1,
                     .p_clear_values = &clear_value,
                 }, .@"inline");
 
-                vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
-                vk_dev.wrapper.endCommandBuffer(cmd_buf) catch |err| break :exit err;
+                vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
+                vk_dev.wrapper.endCommandBuffer(cmd_buf.*) catch |err| break :exit err;
 
                 if (state.running) {
                     vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
                         .{
                             .command_buffer_count = 1,
-                            .p_command_buffers = state.vulkan.cmd_bufs.ptr,
+                            .p_command_buffers = &[_]vk.CommandBuffer{cmd_buf.*},
                         },
                     }, .null_handle) catch |err| break :exit err;
 
@@ -800,7 +831,7 @@ fn handle_wl_events(state: *State) void {
     var wl_state = &state.wayland;
     const event_iterator = &wl_state.wl_ev_iter;
 
-    loop: while (true) {
+    loop: while (state.running) {
         const ev = event_iterator.next() catch |err| {
             app_log.err("Wayland Event Thread Encountered Fatal Error: {any}", .{err});
             wl_state.socket_closed = true;
@@ -840,8 +871,18 @@ fn handle_wl_events(state: *State) void {
                     if (action_opt) |action|
                         switch (action) {
                             .configure => |configure| {
-                                state.width = configure.width;
-                                state.height = configure.height;
+                                if (configure.width > state.width or configure.height > state.height) {
+                                    app_log.info("Resizing Window :: {d}x{d} -> {d}x{d}", .{
+                                        state.width,
+                                        state.height,
+                                        configure.width,
+                                        configure.height,
+                                    });
+                                    state.width = configure.width;
+                                    state.height = configure.height;
+
+                                    // TODO: Rebuild Swapchain to render to new window size
+                                }
                             },
                             .close => { //  Empty struct, nothing to capture
                                 app_log.info("Toplevel Received Close Signal", .{});
@@ -877,6 +918,7 @@ fn handle_wl_events(state: *State) void {
                                     app_log.err("DMABuf Feedback :: Failed to Map Supported Formats Table :: {s}", .{@errorName(err)});
                                     break :res err;
                                 };
+                                defer std.posix.munmap(table_data);
 
                                 // 16-byte pairs
                                 // 32-bit uint format
@@ -904,7 +946,7 @@ fn handle_wl_events(state: *State) void {
                                         mod_val.code,
                                     });
 
-                                    state.gfx_format.wl_format = .argb8888;
+                                    state.gfx_format.wl_format = .abgr8888;
                                 }
                             }
                         },
