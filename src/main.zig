@@ -215,8 +215,8 @@ pub fn main() !void {
             break :state .{
                 .wayland = wl_state,
                 .running = true,
-                .vulkan = undefined,
                 .gfx_format = undefined,
+                .graphics_context = undefined,
                 .width = 800,
                 .height = 600,
             };
@@ -242,24 +242,18 @@ pub fn main() !void {
         }) catch |err| break :exit err;
 
         app_log.debug("Initializing Vulkan State", .{});
-        state.vulkan = vk_state: {
-            state.gfx_format.vk_format = .r8g8b8a8_unorm;
+        state.graphics_context = vk_state: {
             const screen_width: u32 = @intCast(state.width);
             const screen_height: u32 = @intCast(state.height);
 
             // Create Vulkan Graphics Context
             app_log.debug("Creating Graphics Context", .{});
-            const graphics_context = graphics_context: {
-                break :graphics_context GraphicsContext.init(arena.allocator(), "Simple Window", .{ .width = screen_width, .height = screen_height }, false);
+            var graphics_context = graphics_context: {
+                break :graphics_context GraphicsContext.init(arena, "Simple Window", .{ .width = screen_width, .height = screen_height, .depth = 1 }, .r8g8b8a8_unorm, false);
             } catch |err| {
                 app_log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
-                break :exit error.InitializationFailed;
+                break :exit error.VulkanInitializationFailed;
             };
-
-            // TODO:
-            // -[ ] Move most of this to GraphicsContext init
-            // -[ ] Make pipeling creation function for GraphicsContext
-            // -[ ] Recreate pipeline on window resize events
 
             const vk_dev = graphics_context.dev;
 
@@ -275,255 +269,28 @@ pub fn main() !void {
             }, null) catch |err| break :exit err;
             defer vk_dev.destroyShaderModule(frag, null);
 
-            const vk_image = vk_dev.wrapper.createImage(vk_dev.handle, &.{
-                .flags = .{ .@"2d_view_compatible_bit_ext" = true },
-                .image_type = .@"2d",
-                .extent = .{
-                    .width = @intCast(screen_width),
-                    .height = @intCast(screen_height),
-                    .depth = 1,
-                },
-                .mip_levels = 1,
-                .array_layers = 1,
-                .format = state.gfx_format.vk_format,
-                .tiling = .linear,
-                .initial_layout = .present_src_khr,
-                .usage = .{
-                    .transfer_src_bit = true,
-                    .color_attachment_bit = true,
-                },
-                .samples = .{ .@"1_bit" = true },
-                .sharing_mode = .exclusive,
-            }, null) catch |err| {
-                app_log.err("Failed to create VkImage with error: {s}", .{@errorName(err)});
+            const pipeline_create_res = graphics_context.create_pipelines(&[_]vk.ShaderModule{ vert, frag }, &[_][*:0]const u8{ "main", "main" }) catch |err| break :exit err;
+            app_log.debug("Pipeline Creation Returned Code: {s}", .{@tagName(pipeline_create_res)});
+
+            graphics_context.create_framebuffers() catch |err| {
+                app_log.err("Failed to Create Initial Vulkan Framebuffers :: {s}", .{@errorName(err)});
                 break :exit err;
             };
 
-            const vk_image_view = vk_dev.wrapper.createImageView(vk_dev.handle, &.{
-                .view_type = .@"2d",
-                .image = vk_image,
-                .format = state.gfx_format.vk_format,
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-                .components = .{
-                    .r = .r,
-                    .g = .g,
-                    .b = .b,
-                    .a = .a,
-                },
-            }, null) catch |err| {
-                app_log.err("Failed to create VkImageView with error: {s}", .{@errorName(err)});
-                break :exit err;
-            };
-
-            const mem_reqs = vk_dev.wrapper.getImageMemoryRequirements(vk_dev.handle, vk_image);
-
-            const instance = graphics_context.instance;
-            const pdev = graphics_context.pdev;
-
-            const mem_type: vk.MemoryType = mem_type: {
-                const pdev_mem_reqs = instance.wrapper.getPhysicalDeviceMemoryProperties(pdev);
-                var idx: u32 = 0;
-                while (idx < pdev_mem_reqs.memory_type_count) : (idx += 1) {
-                    const mem_type_flags = pdev_mem_reqs.memory_types[idx].property_flags;
-                    if (mem_reqs.memory_type_bits & (@as(u6, 1) << @as(u3, @intCast(idx))) != 0 and (mem_type_flags.host_coherent_bit and mem_type_flags.host_visible_bit)) {
-                        break :mem_type pdev_mem_reqs.memory_types[idx];
-                    }
-                }
-
-                break :mem_type .{
-                    .property_flags = .{},
-                    .heap_index = 0,
-                };
-            };
-
-            const export_mem = try vk_dev.wrapper.allocateMemory(vk_dev.handle, &.{
-                .p_next = &vk.ExportMemoryAllocateInfo{
-                    .handle_types = .{
-                        .dma_buf_bit_ext = true,
-                        .host_allocation_bit_ext = true,
-                    },
-                },
-                .allocation_size = mem_reqs.size,
-                .memory_type_index = mem_type.heap_index,
-            }, null);
-
-            try vk_dev.wrapper.bindImageMemory(vk_dev.handle, vk_image, export_mem, 0);
-
-            const vk_fd = try vk_dev.wrapper.getMemoryFdKHR(vk_dev.handle, &.{
-                .memory = export_mem,
-                .handle_type = .{ .dma_buf_bit_ext = true },
-            });
-
-            const cmd_pool = try vk_dev.wrapper.createCommandPool(vk_dev.handle, &.{
-                .queue_family_index = graphics_context.graphics_queue.family,
-                .flags = .{ .reset_command_buffer_bit = true },
-            }, null);
-
-            const image_count = 2;
-            const cmd_bufs = arena.push(vk.CommandBuffer, image_count);
-            vk_dev.wrapper.allocateCommandBuffers(vk_dev.handle, &.{
-                .command_pool = cmd_pool,
-                .level = .primary,
-                .command_buffer_count = @intCast(cmd_bufs.len),
-            }, @ptrCast(cmd_bufs)) catch |err| break :exit err;
-
-            const render_pass = vk_dev.wrapper.createRenderPass(vk_dev.handle, &.{
-                .attachment_count = 1,
-                .p_attachments = &[_]vk.AttachmentDescription{
-                    .{
-                        .format = state.gfx_format.vk_format,
-                        .samples = .{ .@"1_bit" = true },
-                        .load_op = .clear,
-                        .store_op = .store,
-                        .stencil_load_op = .dont_care,
-                        .stencil_store_op = .dont_care,
-                        .initial_layout = .undefined,
-                        .final_layout = .present_src_khr,
-                    },
-                },
-                .subpass_count = 1,
-                .p_subpasses = &[_]vk.SubpassDescription{
-                    .{
-                        .pipeline_bind_point = .graphics,
-                        .color_attachment_count = 1,
-                        .p_color_attachments = &[_]vk.AttachmentReference{
-                            .{
-                                .attachment = 0,
-                                .layout = .color_attachment_optimal,
-                            },
-                        },
-                    },
-                },
-            }, null) catch |err| break :exit err;
-
-            const pipeline_layout = vk_dev.wrapper.createPipelineLayout(vk_dev.handle, &.{}, null) catch |err| break :exit err;
-            const pipelines = arena.push(vk.Pipeline, 1);
-
-            app_log.debug("Creating Graphics Pipelines", .{});
-            const pipeline = vk_dev.wrapper.createGraphicsPipelines(vk_dev.handle, .null_handle, 1, &[_]vk.GraphicsPipelineCreateInfo{
-                .{
-                    .stage_count = 2,
-                    .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
-                        .{
-                            .stage = .{ .vertex_bit = true },
-                            .module = vert,
-                            .p_name = "main",
-                        },
-                        .{
-                            .stage = .{ .fragment_bit = true },
-                            .module = frag,
-                            .p_name = "main",
-                        },
-                    },
-                    .p_vertex_input_state = &.{
-                        .vertex_binding_description_count = 0,
-                        .vertex_attribute_description_count = 0,
-                    },
-                    .p_input_assembly_state = &.{
-                        .topology = .triangle_list,
-                        .primitive_restart_enable = 0,
-                    },
-                    .p_viewport_state = &.{
-                        .viewport_count = 1,
-                        .p_viewports = &[_]vk.Viewport{
-                            .{
-                                .x = 0,
-                                .y = 0,
-                                .width = @floatFromInt(screen_width),
-                                .height = @floatFromInt(screen_height),
-                                .min_depth = 0,
-                                .max_depth = 1,
-                            },
-                        },
-                        .scissor_count = 1,
-                        .p_scissors = &[_]vk.Rect2D{
-                            .{
-                                .offset = .{ .x = 0, .y = 0 },
-                                .extent = .{ .width = @intCast(screen_width), .height = @intCast(screen_height) },
-                            },
-                        },
-                    },
-                    .p_rasterization_state = &.{
-                        .depth_clamp_enable = vk.FALSE,
-                        .rasterizer_discard_enable = vk.FALSE,
-                        .polygon_mode = .fill,
-                        .front_face = .clockwise,
-                        .cull_mode = .{},
-                        .depth_bias_enable = vk.FALSE,
-                        .depth_bias_constant_factor = 1,
-                        .depth_bias_clamp = 1,
-                        .depth_bias_slope_factor = 0,
-                        .line_width = 1,
-                    },
-                    .p_multisample_state = &.{
-                        .rasterization_samples = .{ .@"1_bit" = true },
-                        .sample_shading_enable = 0,
-                        .min_sample_shading = 0,
-                        .alpha_to_coverage_enable = 0,
-                        .alpha_to_one_enable = 0,
-                    },
-                    .p_color_blend_state = &.{
-                        .logic_op_enable = 0,
-                        .logic_op = .clear,
-                        .attachment_count = 1,
-                        .p_attachments = &[_]vk.PipelineColorBlendAttachmentState{
-                            .{
-                                .blend_enable = 0,
-                                .src_color_blend_factor = .src_color,
-                                .dst_color_blend_factor = .src_color,
-                                .color_blend_op = .add,
-                                .src_alpha_blend_factor = .src_color,
-                                .dst_alpha_blend_factor = .src_color,
-                                .alpha_blend_op = .add,
-                                .color_write_mask = .{
-                                    .r_bit = true,
-                                    .g_bit = true,
-                                    .b_bit = true,
-                                    .a_bit = true,
-                                },
-                            },
-                        },
-                        .blend_constants = [_]f32{ 0, 0, 0, 0 },
-                    },
-                    .render_pass = render_pass,
-                    .subpass = 0,
-                    .base_pipeline_index = 0,
-                },
-            }, null, pipelines.ptr) catch |err| break :exit err;
-            app_log.debug("pipeline: {s}", .{@tagName(pipeline)});
-
-            const framebuffers = arena.push(vk.Framebuffer, image_count);
-            for (framebuffers) |*framebuffer| {
-                framebuffer.* = vk_dev.wrapper.createFramebuffer(vk_dev.handle, &.{
-                    .render_pass = render_pass,
-                    .attachment_count = 1,
-                    .p_attachments = &[_]vk.ImageView{vk_image_view},
-                    .width = screen_width,
-                    .height = screen_height,
-                    .layers = 1,
-                }, null) catch |err| break :exit err;
-            }
-
-            for (cmd_bufs, 0..) |cmd_buf, idx| {
+            for (graphics_context.cmd_bufs, 0..) |cmd_buf, idx| {
                 try vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
                     .flags = .{},
                 });
 
                 const clear_value = [_]vk.ClearValue{.{
                     .color = .{
-                        .float_32 = [_]f32{ 0.1, 0.3, 0.3, 1.0 }, // white
+                        .float_32 = [_]f32{ 1.0, 1.0, 1.0, 1.0 },
                     },
                 }};
 
                 vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
-                    .render_pass = render_pass,
-                    .framebuffer = framebuffers[idx],
+                    .render_pass = graphics_context.render_pass,
+                    .framebuffer = graphics_context.framebuffers[idx],
                     .render_area = .{
                         .offset = .{
                             .x = 0,
@@ -546,80 +313,22 @@ pub fn main() !void {
             vk_dev.wrapper.queueSubmit(graphics_context.graphics_queue.handle, 1, &[_]vk.SubmitInfo{
                 .{
                     .command_buffer_count = 1,
-                    .p_command_buffers = cmd_bufs.ptr,
+                    .p_command_buffers = graphics_context.cmd_bufs.ptr,
                 },
             }, .null_handle) catch |err| break :exit err;
 
             app_log.info("Initial Render Dimensions: {d}x{d}", .{ state.width, state.height });
             // Return constructed state
-            break :vk_state .{
-                .graphics_context = graphics_context,
-                .image = vk_image,
-                .image_view = vk_image_view,
-                .image_count = image_count,
-                .export_mem = export_mem,
-                .render_pass = render_pass,
-                .mem_fd = vk_fd,
-                .cmd_pool = cmd_pool,
-                .cmd_bufs = cmd_bufs,
-                .pipeline_layout = pipeline_layout,
-                .pipelines = pipelines,
-                .framebuffers = framebuffers,
-            };
+            break :vk_state graphics_context;
         };
 
-        const dmabuf_params_a = state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1) catch |err| break :exit err;
-        state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
-            .params_id = dmabuf_params_a.id,
-        }) catch |err| break :exit err;
-
-        dmabuf_params_a.add(state.wayland.sock_writer, .{
-            .fd = state.vulkan.mem_fd,
-            .plane_idx = 0,
-            .offset = 0,
-            .stride = @intCast(state.width * 4),
-            .modifier_hi = Drm.Modifier.linear.hi(),
-            .modifier_lo = Drm.Modifier.linear.lo(),
-        }) catch |err| break :exit err;
-
-        const wl_buffer_a = state.wayland.interface_registry.register(wl.Buffer) catch |err| break :exit err;
-        dmabuf_params_a.create_immed(state.wayland.sock_writer, .{
-            .buffer_id = wl_buffer_a.id,
-            .width = @intCast(state.width),
-            .height = @intCast(state.height),
-            .format = @intFromEnum(state.gfx_format.wl_format),
-            .flags = .{},
-        }) catch |err| break :exit err;
-        state.wayland.wl_buffer[0] = wl_buffer_a;
-
-        const dmabuf_params_b = state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1) catch |err| break :exit err;
-        state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
-            .params_id = dmabuf_params_b.id,
-        }) catch |err| break :exit err;
-
-        dmabuf_params_b.add(state.wayland.sock_writer, .{
-            .fd = state.vulkan.mem_fd,
-            .plane_idx = 0,
-            .offset = @intCast(state.width * state.height * 4),
-            .stride = @intCast(state.width * 4),
-            .modifier_hi = Drm.Modifier.linear.hi(),
-            .modifier_lo = Drm.Modifier.linear.lo(),
-        }) catch |err| break :exit err;
-
-        const wl_buffer_b = state.wayland.interface_registry.register(wl.Buffer) catch |err| break :exit err;
-        dmabuf_params_b.create_immed(state.wayland.sock_writer, .{
-            .buffer_id = wl_buffer_b.id,
-            .width = @intCast(state.width),
-            .height = @intCast(state.height),
-            .format = @intFromEnum(state.gfx_format.wl_format),
-            .flags = .{},
-        }) catch |err| break :exit err;
-        state.wayland.wl_buffer[1] = wl_buffer_a;
+        state.wayland.wl_buffer[0] = state.create_buffer(state.graphics_context.mem_fds[0], state.gfx_format.wl_format) catch |err| break :exit err;
+        state.wayland.wl_buffer[1] = state.create_buffer(state.graphics_context.mem_fds[1], state.gfx_format.wl_format) catch |err| break :exit err;
 
         state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
         state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
-            .buffer = wl_buffer_a.id,
+            .buffer = state.wayland.wl_buffer[0].id,
             .x = 0,
             .y = 0,
         }) catch |err| break :exit err;
@@ -631,10 +340,10 @@ pub fn main() !void {
         var step: f32 = 0.01;
         var cur_frame_idx: usize = 0;
         var prev_time: i64 = std.time.milliTimestamp();
-        while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.vulkan.image_count) {
+        while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.graphics_context.images.len) {
             const time = std.time.milliTimestamp();
 
-            if (time - prev_time > 26) {
+            if (time - prev_time > 32) {
                 red_val += step;
                 blu_val += step;
                 if (red_val >= 1.0 or red_val <= 0.0) {
@@ -643,11 +352,11 @@ pub fn main() !void {
 
                 prev_time = time;
 
-                const vk_dev = state.vulkan.graphics_context.dev;
-                vk_dev.wrapper.queueWaitIdle(state.vulkan.graphics_context.graphics_queue.handle) catch |err| break :exit err;
+                const vk_dev = state.graphics_context.dev;
+                vk_dev.wrapper.queueWaitIdle(state.graphics_context.graphics_queue.handle) catch |err| break :exit err;
 
-                const cmd_buf = &state.vulkan.cmd_bufs[cur_frame_idx];
-                const graphics_queue = state.vulkan.graphics_context.graphics_queue;
+                const cmd_buf = &state.graphics_context.cmd_bufs[cur_frame_idx];
+                const graphics_queue = state.graphics_context.graphics_queue;
 
                 const clear_value = [_]vk.ClearValue{
                     .{
@@ -662,8 +371,8 @@ pub fn main() !void {
                 }) catch |err| break :exit err;
 
                 vk_dev.wrapper.cmdBeginRenderPass(cmd_buf.*, &.{
-                    .render_pass = state.vulkan.render_pass,
-                    .framebuffer = state.vulkan.framebuffers[cur_frame_idx],
+                    .render_pass = state.graphics_context.render_pass,
+                    .framebuffer = state.graphics_context.framebuffers[cur_frame_idx],
                     .render_area = .{
                         .offset = .{
                             .x = 0,
@@ -697,7 +406,7 @@ pub fn main() !void {
                     }) catch |err| break :exit err;
 
                     state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
-                        .buffer = state.wayland.wl_buffer[cur_frame_idx].id,
+                        .buffer = state.wayland.wl_buffer[0].id,
                         .x = 0,
                         .y = 0,
                     }) catch |err| break :exit err;
@@ -736,28 +445,14 @@ const State = struct {
         xdg_surface_acked: bool = false,
         socket_closed: bool = false,
     };
-    const Vulkan = struct {
-        graphics_context: GraphicsContext,
-        image: vk.Image,
-        image_view: vk.ImageView,
-        image_count: usize,
-        export_mem: vk.DeviceMemory,
-        mem_fd: c_int,
-        cmd_pool: vk.CommandPool,
-        cmd_bufs: []vk.CommandBuffer,
-        render_pass: vk.RenderPass,
-        pipeline_layout: vk.PipelineLayout,
-        pipelines: []vk.Pipeline,
-        framebuffers: []vk.Framebuffer,
-    };
     const GfxFormat = struct {
         vk_format: vk.Format,
         wl_format: Drm.Format,
     };
 
     wayland: Wayland,
-    vulkan: Vulkan,
     gfx_format: GfxFormat,
+    graphics_context: GraphicsContext,
     width: i32,
     height: i32,
     running: bool,
@@ -807,23 +502,44 @@ const State = struct {
         }
         // Vulkan deinit
         {
-            const dev = state.vulkan.graphics_context.dev;
-            defer state.vulkan.graphics_context.deinit();
-
-            dev.wrapper.freeCommandBuffers(
-                dev.handle,
-                state.vulkan.cmd_pool,
-                @intCast(state.vulkan.cmd_bufs.len),
-                state.vulkan.cmd_bufs.ptr,
-            );
-            dev.wrapper.destroyPipelineLayout(dev.handle, state.vulkan.pipeline_layout, null);
-            for (state.vulkan.pipelines) |pipeline| {
-                dev.destroyPipeline(pipeline, null);
-            }
-
-            dev.wrapper.destroyImageView(dev.handle, state.vulkan.image_view, null);
-            dev.wrapper.destroyImage(dev.handle, state.vulkan.image, null);
+            defer state.graphics_context.deinit();
         }
+    }
+
+    pub fn create_buffer(state: *State, fd: std.posix.fd_t, format: Drm.Format) !wl.Buffer {
+        const dmabuf_params = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
+        defer {
+            // dmabuf_params.destroy(state.wayland.sock_writer, .{}) catch |err| {
+            //     wl_log.warn("Failed to destroy dmabufparams object :: {s}", .{@errorName(err)});
+            // };
+            // state.wayland.interface_registry.remove(dmabuf_params);
+        }
+
+        try state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
+            .params_id = dmabuf_params.id,
+        });
+        try dmabuf_params.add(state.wayland.sock_writer, .{
+            .fd = fd,
+            .plane_idx = 0,
+            .offset = 0,
+            .stride = @intCast(state.width * 4),
+            .modifier_hi = Drm.Modifier.linear.hi(),
+            .modifier_lo = Drm.Modifier.linear.lo(),
+        });
+
+        const wl_buffer = try state.wayland.interface_registry.register(wl.Buffer);
+        // TODO: add interface_registry.remove(global)
+        // errdefer state.wayland.interface_registry.remove(wl_buffer);
+
+        try dmabuf_params.create_immed(state.wayland.sock_writer, .{
+            .buffer_id = wl_buffer.id,
+            .width = @intCast(state.width),
+            .height = @intCast(state.height),
+            .format = @intFromEnum(format),
+            .flags = .{},
+        });
+
+        return wl_buffer;
     }
 };
 
@@ -878,6 +594,7 @@ fn handle_wl_events(state: *State) void {
                                         configure.width,
                                         configure.height,
                                     });
+
                                     state.width = configure.width;
                                     state.height = configure.height;
 
@@ -1085,6 +802,14 @@ const InterfaceRegistry = struct {
             .id = self.idx,
         };
     }
+    pub fn remove(self: *InterfaceRegistry, obj: anytype) void {
+        _ = self;
+        _ = obj;
+        // defer self.idx -= 1;
+
+        // app_log.info("Removing Object with id: {d}", .{self.idx});
+        // _ = self.elems.remove(obj.id);
+    }
 
     pub fn register(self: *InterfaceRegistry, comptime T: type) !T {
         defer self.idx += 1;
@@ -1237,8 +962,6 @@ fn EventIt(comptime buf_size: comptime_int) type {
 
         /// Calls `.shift()` on data buffer, and reads in new bytes from stream
         fn load_events(iter: *Iterator) !void {
-            wl_log.info("  Event Iterator :: Loading Events", .{});
-
             if (receive_cmsg(iter.stream.handle, &iter.fd_buf)) |fd| {
                 const idx = iter.fd_queue.write % FdQueue.Len;
                 iter.fd_queue.data[idx] = fd;
