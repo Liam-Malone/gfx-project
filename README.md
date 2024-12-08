@@ -43,4 +43,4 @@ In the process of attaining a basic window, I realized it would be much easier i
 ![First screenshot of the GPU-rendered blank window](./assets/screenshots/first_vk-window.jpeg)
 
 - 01:00am - 08/12/2024: Fixed Coloring For a Proper Background Clearing
-![Recording of screen-clearing working as intended](./assets/videos/functioning-color-clear.mp4)
+![GIF of screen-clearing working as intended](./assets/videos/clear-demo.gif)
