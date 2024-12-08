@@ -56,10 +56,12 @@ const vkEnumeratePhysicalDevices = @extern(vk.PfnEnumeratePhysicalDevices, .{
     .library_name = "vulkan",
 });
 
+const ImageCount = 2;
+
 allocator: Allocator,
+arena: *Arena,
 
 vkb: BaseDispatch,
-
 instance: Instance,
 // surface: vk.SurfaceKHR,
 pdev: vk.PhysicalDevice,
@@ -70,15 +72,30 @@ dev: Device,
 graphics_queue: Queue,
 // present_queue: Queue,
 
+extent: vk.Extent3D,
+format: vk.Format,
+images: [ImageCount]vk.Image,
+image_views: [ImageCount]vk.ImageView,
+export_mem: [ImageCount]vk.DeviceMemory,
+mem_fds: [ImageCount]c_int,
+cmd_pool: vk.CommandPool,
+cmd_bufs: []vk.CommandBuffer,
+render_pass: vk.RenderPass,
+
+pipeline_layout: vk.PipelineLayout = undefined,
+pipelines: []vk.Pipeline = undefined,
+framebuffers: []vk.Framebuffer = undefined,
+
 // debug_messenger: vk.DebugUtilsMessengerEXT,
 
 pub fn init(
-    arena: Allocator,
+    arena: *Arena,
     app_name: [*:0]const u8,
-    extent: vk.Extent2D,
+    extent: vk.Extent3D,
+    format: vk.Format,
     enable_validation: bool,
 ) !GraphicsContext {
-    _ = extent;
+    const alloc = arena.allocator();
     const vkb = try BaseDispatch.load(vkGetInstanceProcAddr);
 
     const app_info: vk.ApplicationInfo = .{
@@ -107,14 +124,14 @@ pub fn init(
         .pp_enabled_layer_names = enabled_layers.ptr,
     }, null);
 
-    const vki: *InstanceDispatch = try arena.create(InstanceDispatch);
-    errdefer arena.destroy(vki);
+    const vki: *InstanceDispatch = try alloc.create(InstanceDispatch);
+    errdefer alloc.destroy(vki);
     vki.* = try InstanceDispatch.load(vkb_instance, vkb.dispatch.vkGetInstanceProcAddr);
     const instance: Instance = .init(vkb_instance, vki);
     errdefer instance.destroyInstance(null);
 
     // Select a physical device to use
-    const selected_device: DeviceCandidate = select_physical_device(arena, instance, try instance.enumeratePhysicalDevicesAlloc(arena));
+    const selected_device: DeviceCandidate = select_physical_device(alloc, instance, try instance.enumeratePhysicalDevicesAlloc(alloc));
     const physical_device = selected_device.pdev;
     if (physical_device == .null_handle) {
         return error.NoVulkanDevice;
@@ -122,8 +139,8 @@ pub fn init(
     const props = selected_device.props;
 
     const graphics_family = graphics_family: {
-        const families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(physical_device, arena);
-        defer arena.free(families);
+        const families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(physical_device, alloc);
+        defer alloc.free(families);
 
         for (families, 0..) |properties, i| {
             const family: u32 = @intCast(i);
@@ -156,7 +173,7 @@ pub fn init(
         vk_log.err("Failed to create Vulkan Logical Device with error: {s}", .{@errorName(err)});
         return error.VkDeviceCreationFailed;
     };
-    const vkd = try arena.create(DeviceDispatch);
+    const vkd = try alloc.create(DeviceDispatch);
     vkd.* = try .load(device, instance.wrapper.dispatch.vkGetDeviceProcAddr);
     const dev = Device.init(device, vkd);
     errdefer dev.destroyDevice(null);
@@ -166,8 +183,163 @@ pub fn init(
         graphics_family,
     );
 
+    const images = [ImageCount]vk.Image{
+        dev.wrapper.createImage(dev.handle, &.{
+            .flags = .{ .@"2d_view_compatible_bit_ext" = true },
+            .image_type = .@"2d",
+            .extent = .{
+                .width = extent.width,
+                .height = extent.height,
+                .depth = extent.depth,
+            },
+            .mip_levels = 1,
+            .array_layers = 1,
+            .format = format,
+            .tiling = .linear,
+            .initial_layout = .present_src_khr,
+            .usage = .{
+                .transfer_src_bit = true,
+                .color_attachment_bit = true,
+            },
+            .samples = .{ .@"1_bit" = true },
+            .sharing_mode = .exclusive,
+        }, null) catch |err| {
+            vk_log.err("Failed to create VkImage with error: {s}", .{@errorName(err)});
+            return err;
+        },
+        dev.wrapper.createImage(dev.handle, &.{
+            .flags = .{ .@"2d_view_compatible_bit_ext" = true },
+            .image_type = .@"2d",
+            .extent = .{
+                .width = extent.width,
+                .height = extent.height,
+                .depth = extent.depth,
+            },
+            .mip_levels = 1,
+            .array_layers = 1,
+            .format = format,
+            .tiling = .linear,
+            .initial_layout = .present_src_khr,
+            .usage = .{
+                .transfer_src_bit = true,
+                .color_attachment_bit = true,
+            },
+            .samples = .{ .@"1_bit" = true },
+            .sharing_mode = .exclusive,
+        }, null) catch |err| {
+            vk_log.err("Failed to create VkImage with error: {s}", .{@errorName(err)});
+            return err;
+        },
+    };
+
+    var image_views: [ImageCount]vk.ImageView = undefined;
+    var fds: [ImageCount]c_int = undefined;
+    var export_mem: [ImageCount]vk.DeviceMemory = undefined;
+    for (images, 0..) |vk_image, idx| {
+        image_views[idx] = dev.wrapper.createImageView(dev.handle, &.{
+            .view_type = .@"2d",
+            .image = vk_image,
+            .format = format,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .components = .{
+                .r = .r,
+                .g = .g,
+                .b = .b,
+                .a = .a,
+            },
+        }, null) catch |err| {
+            vk_log.err("Failed to create VkImageView with error: {s}", .{@errorName(err)});
+            return err;
+        };
+
+        const mem_reqs = dev.wrapper.getImageMemoryRequirements(dev.handle, vk_image);
+
+        const mem_type: vk.MemoryType = mem_type: {
+            const pdev_mem_reqs = instance.wrapper.getPhysicalDeviceMemoryProperties(physical_device);
+            var mem_idx: u32 = 0;
+            while (mem_idx < pdev_mem_reqs.memory_type_count) : (mem_idx += 1) {
+                const mem_type_flags = pdev_mem_reqs.memory_types[idx].property_flags;
+                if (mem_reqs.memory_type_bits & (@as(u6, 1) << @as(u3, @intCast(mem_idx))) != 0 and (mem_type_flags.host_coherent_bit and mem_type_flags.host_visible_bit)) {
+                    break :mem_type pdev_mem_reqs.memory_types[mem_idx];
+                }
+            }
+
+            break :mem_type .{
+                .property_flags = .{},
+                .heap_index = 0,
+            };
+        };
+
+        export_mem[idx] = try dev.wrapper.allocateMemory(dev.handle, &.{
+            .p_next = &vk.ExportMemoryAllocateInfo{
+                .handle_types = .{
+                    .dma_buf_bit_ext = true,
+                    .host_allocation_bit_ext = true,
+                },
+            },
+            .allocation_size = mem_reqs.size,
+            .memory_type_index = mem_type.heap_index,
+        }, null);
+
+        try dev.wrapper.bindImageMemory(dev.handle, vk_image, export_mem[idx], 0);
+
+        fds[idx] = try dev.wrapper.getMemoryFdKHR(dev.handle, &.{
+            .memory = export_mem[idx],
+            .handle_type = .{ .dma_buf_bit_ext = true },
+        });
+    }
+
+    const cmd_pool = try dev.wrapper.createCommandPool(dev.handle, &.{
+        .queue_family_index = graphics_queue.family,
+        .flags = .{ .reset_command_buffer_bit = true },
+    }, null);
+
+    const image_count = 2;
+    const cmd_bufs = arena.push(vk.CommandBuffer, image_count);
+    try dev.wrapper.allocateCommandBuffers(dev.handle, &.{
+        .command_pool = cmd_pool,
+        .level = .primary,
+        .command_buffer_count = @intCast(cmd_bufs.len),
+    }, @ptrCast(cmd_bufs));
+
+    const render_pass = try dev.wrapper.createRenderPass(dev.handle, &.{
+        .attachment_count = 1,
+        .p_attachments = &[_]vk.AttachmentDescription{
+            .{
+                .format = format,
+                .samples = .{ .@"1_bit" = true },
+                .load_op = .clear,
+                .store_op = .store,
+                .stencil_load_op = .dont_care,
+                .stencil_store_op = .dont_care,
+                .initial_layout = .undefined,
+                .final_layout = .present_src_khr,
+            },
+        },
+        .subpass_count = 1,
+        .p_subpasses = &[_]vk.SubpassDescription{
+            .{
+                .pipeline_bind_point = .graphics,
+                .color_attachment_count = 1,
+                .p_color_attachments = &[_]vk.AttachmentReference{
+                    .{
+                        .attachment = 0,
+                        .layout = .color_attachment_optimal,
+                    },
+                },
+            },
+        },
+    }, null);
+
     return .{
-        .allocator = arena,
+        .allocator = alloc,
+        .arena = arena,
         .vkb = vkb,
         .instance = instance,
         .pdev = physical_device,
@@ -175,15 +347,29 @@ pub fn init(
         .mem_props = instance.getPhysicalDeviceMemoryProperties(physical_device),
         .dev = dev,
         .graphics_queue = graphics_queue,
+
+        .extent = extent,
+        .format = format,
+        .images = images,
+        .image_views = image_views,
+        .export_mem = export_mem,
+        .mem_fds = fds,
+        .cmd_pool = cmd_pool,
+        .cmd_bufs = cmd_bufs,
+        .render_pass = render_pass,
+
+        .pipeline_layout = undefined,
+        .pipelines = undefined,
+        .framebuffers = undefined,
     };
 }
 
-pub fn deinit(context: GraphicsContext) void {
-    context.dev.destroyDevice(null);
-    context.instance.destroyInstance(null);
+pub fn deinit(ctx: *GraphicsContext) void {
+    ctx.dev.destroyDevice(null);
+    ctx.instance.destroyInstance(null);
 
-    context.allocator.destroy(context.dev.wrapper);
-    context.allocator.destroy(context.instance.wrapper);
+    ctx.allocator.destroy(ctx.dev.wrapper);
+    ctx.allocator.destroy(ctx.instance.wrapper);
 }
 
 const DeviceCandidate = struct {
@@ -264,3 +450,122 @@ pub const Queue = struct {
         };
     }
 };
+
+pub fn create_pipelines(
+    ctx: *GraphicsContext,
+    shaders: []const vk.ShaderModule,
+    shader_p_names: []const [*:0]const u8,
+) !vk.Result {
+    ctx.pipeline_layout = try ctx.dev.wrapper.createPipelineLayout(ctx.dev.handle, &.{}, null);
+    ctx.pipelines = ctx.arena.push(vk.Pipeline, 1);
+    return try ctx.dev.wrapper.createGraphicsPipelines(ctx.dev.handle, .null_handle, 1, &[_]vk.GraphicsPipelineCreateInfo{
+        .{
+            .stage_count = @intCast(shaders.len),
+            .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
+                .{
+                    .stage = .{ .vertex_bit = true },
+                    .module = shaders[0],
+                    .p_name = shader_p_names[0],
+                },
+                .{
+                    .stage = .{ .fragment_bit = true },
+                    .module = shaders[1],
+                    .p_name = shader_p_names[1],
+                },
+            },
+            .p_vertex_input_state = &.{
+                .vertex_binding_description_count = 0,
+                .vertex_attribute_description_count = 0,
+            },
+            .p_input_assembly_state = &.{
+                .topology = .triangle_list,
+                .primitive_restart_enable = 0,
+            },
+            .p_viewport_state = &.{
+                .viewport_count = 1,
+                .p_viewports = &[_]vk.Viewport{
+                    .{
+                        .x = 0,
+                        .y = 0,
+                        .width = @floatFromInt(ctx.extent.width),
+                        .height = @floatFromInt(ctx.extent.height),
+                        .min_depth = 0,
+                        .max_depth = @floatFromInt(ctx.extent.depth),
+                    },
+                },
+                .scissor_count = 1,
+                .p_scissors = &[_]vk.Rect2D{
+                    .{
+                        .offset = .{
+                            .x = 0,
+                            .y = 0,
+                        },
+                        .extent = .{
+                            .width = @intCast(ctx.extent.width),
+                            .height = @intCast(ctx.extent.height),
+                        },
+                    },
+                },
+            },
+            .p_rasterization_state = &.{
+                .depth_clamp_enable = vk.FALSE,
+                .rasterizer_discard_enable = vk.FALSE,
+                .polygon_mode = .fill,
+                .front_face = .clockwise,
+                .cull_mode = .{},
+                .depth_bias_enable = vk.FALSE,
+                .depth_bias_constant_factor = 1,
+                .depth_bias_clamp = 1,
+                .depth_bias_slope_factor = 0,
+                .line_width = 1,
+            },
+            .p_multisample_state = &.{
+                .rasterization_samples = .{ .@"1_bit" = true },
+                .sample_shading_enable = 0,
+                .min_sample_shading = 0,
+                .alpha_to_coverage_enable = 0,
+                .alpha_to_one_enable = 0,
+            },
+            .p_color_blend_state = &.{
+                .logic_op_enable = 0,
+                .logic_op = .clear,
+                .attachment_count = 1,
+                .p_attachments = &[_]vk.PipelineColorBlendAttachmentState{
+                    .{
+                        .blend_enable = 0,
+                        .src_color_blend_factor = .src_color,
+                        .dst_color_blend_factor = .src_color,
+                        .color_blend_op = .add,
+                        .src_alpha_blend_factor = .src_color,
+                        .dst_alpha_blend_factor = .src_color,
+                        .alpha_blend_op = .add,
+                        .color_write_mask = .{
+                            .r_bit = true,
+                            .g_bit = true,
+                            .b_bit = true,
+                            .a_bit = true,
+                        },
+                    },
+                },
+                .blend_constants = [_]f32{ 0, 0, 0, 0 },
+            },
+            .render_pass = ctx.render_pass,
+            .subpass = 0,
+            .base_pipeline_index = 0,
+        },
+    }, null, ctx.pipelines.ptr);
+}
+
+pub fn create_framebuffers(ctx: *GraphicsContext) !void {
+    ctx.framebuffers = ctx.arena.push(vk.Framebuffer, ctx.images.len);
+    for (ctx.framebuffers, 0..) |*framebuffer, idx| {
+        framebuffer.* = try ctx.dev.wrapper.createFramebuffer(ctx.dev.handle, &.{
+            .render_pass = ctx.render_pass,
+            .attachment_count = 1,
+            .p_attachments = &[_]vk.ImageView{ctx.image_views[idx]},
+            .width = ctx.extent.width,
+            .height = ctx.extent.height,
+            .layers = ctx.extent.depth,
+        }, null);
+    }
+}
