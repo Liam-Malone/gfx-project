@@ -1,13 +1,16 @@
-# Gfx Demo
+# Gfx Project
 
-So... after starting out writing a Wayland client with just libwayland in [C](https://github.com/Liam-Malone/wayland_gfx) and in [Zig](https://github.com/Liam-Malone/zig-wayland_gfx), I got curious and decided I'd like to try invoking calls through the wayland socket directly. With no libwaylandx I found [this guide](https://gaultier.github.io/blog/wayland_xrom_scratch.html) on writing a Wayland GUI client from scratch in C, and decided to try following along in Zig.
+I started out writing a Wayland client with just libwayland in [C](https://github.com/Liam-Malone/wayland_gfx) and wanted to [duplicate in Zig](https://github.com/Liam-Malone/zig-wayland_gfx). I got curious and decided I'd like to try invoking calls through the wayland socket directly, no libwayland.
+I found [this guide](https://gaultier.github.io/blog/wayland_xrom_scratch.html) on writing a Wayland GUI client from scratch in C, and decided to try following along in Zig.
 
-Once I am satisfied with my aims for this project, I may return to those previous client projects, or I may simply continue to expand this project
+One I had the client working with a CPU-rendered window, I figured I could take this further, and start doing GPU rendering.
+The next step was creating a basic Vulkan context and rendering a blank screen, taking advantage of the DMABuf protocol.
 
+Now I'm looking to continue developing this project into more of a proper rendering engine, as I learn more about graphics programming with Vulkan.
 
 ## Code Generation
 
-In the process of attaining a basic window, I realized it would be much easier if I didn't have to manually write everything for every interface I want to use. With this goal in mind, I wrote [`wl_gen.zig`](./src/wl_gen.zig) to produce Zig code to use for interacting with the Wayland server, given a wayland xml specification document.
+In the process of attaining a basic window, I realized it would be much easier if I didn't have to manually write everything for every interface I want to use. With this goal in mind, I wrote [`wl-zig-bindgen.zig`](./src/wl-zig-bindgen.zig) to produce Zig code to use for interacting with the Wayland server, given a wayland xml specification document.
 
 
 ## Goals
@@ -22,9 +25,9 @@ In the process of attaining a basic window, I realized it would be much easier i
 
 #### Next Steps
 
+- [x] Wayland File Descriptor Receiving
 - [ ] Vulkan Swapchain
 - [ ] Window Resizing
-- [ ] Wayland File Descriptor Receiving
 
 
 ### Potential Future Goals
