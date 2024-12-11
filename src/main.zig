@@ -11,8 +11,6 @@ const wl_log = std.log.scoped(.wayland);
 const Header = wl_msg.Header;
 
 const vk = @import("vulkan");
-const vert_spv align(@alignOf(u32)) = @embedFile("vertex_shader").*;
-const frag_spv align(@alignOf(u32)) = @embedFile("fragment_shader").*;
 
 const Drm = @import("Drm.zig");
 
@@ -243,13 +241,56 @@ pub fn main() !void {
 
         app_log.debug("Initializing Vulkan State", .{});
         state.graphics_context = vk_state: {
+            // Shader loading
+            var vert_buf: []u8 = arena.push(u8, 1072);
+            const vert_file = std.fs.cwd().openFile("build/shaders/vert.spv", .{ .mode = .read_only }) catch |err| {
+                app_log.err("File Open Err :: {s}", .{@errorName(err)});
+                state.deinit();
+                break :exit err;
+            };
+            defer vert_file.close();
+
+            const vert_bytes = vert_file.readAll(vert_buf) catch |err| {
+                app_log.err("File Read Err :: {s}", .{@errorName(err)});
+                state.deinit();
+                break :exit err;
+            };
+
+            const vert_spv: [*]const u32 = @ptrCast(@alignCast(vert_buf[0..vert_bytes]));
+
+            var frag_buf: []u8 = arena.push(u8, 564);
+            const frag_file = std.fs.cwd().openFile("build/shaders/frag.spv", .{ .mode = .read_only }) catch |err| {
+                app_log.err("File Open Err :: {s}", .{@errorName(err)});
+                state.deinit();
+                break :exit err;
+            };
+            defer frag_file.close();
+
+            const frag_bytes = frag_file.readAll(frag_buf) catch |err| {
+                app_log.err("File Read Err :: {s}", .{@errorName(err)});
+                state.deinit();
+                break :exit err;
+            };
+
+            const frag_spv: [*]const u32 = @ptrCast(@alignCast(frag_buf[0..frag_bytes]));
+
             const screen_width: u32 = @intCast(state.width);
             const screen_height: u32 = @intCast(state.height);
 
             // Create Vulkan Graphics Context
             app_log.debug("Creating Graphics Context", .{});
             var graphics_context = graphics_context: {
-                break :graphics_context GraphicsContext.init(arena, "Simple Window", .{ .width = screen_width, .height = screen_height, .depth = 1 }, .r8g8b8a8_unorm, false);
+                break :graphics_context GraphicsContext.init(
+                    arena,
+                    "Simple Window",
+                    .{
+                        .width = screen_width,
+                        .height = screen_height,
+                        .depth = 1,
+                    },
+                    .r8g8b8a8_unorm,
+                    false,
+                );
             } catch |err| {
                 app_log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
                 break :exit error.VulkanInitializationFailed;
@@ -258,14 +299,14 @@ pub fn main() !void {
             const vk_dev = graphics_context.dev;
 
             const vert = vk_dev.createShaderModule(&.{
-                .code_size = vert_spv.len,
-                .p_code = @ptrCast(&vert_spv),
+                .code_size = vert_bytes,
+                .p_code = vert_spv,
             }, null) catch |err| break :exit err;
             defer vk_dev.destroyShaderModule(vert, null);
 
             const frag = vk_dev.createShaderModule(&.{
-                .code_size = frag_spv.len,
-                .p_code = @ptrCast(&frag_spv),
+                .code_size = frag_bytes,
+                .p_code = frag_spv,
             }, null) catch |err| break :exit err;
             defer vk_dev.destroyShaderModule(frag, null);
 
@@ -509,10 +550,7 @@ const State = struct {
     pub fn create_buffer(state: *State, fd: std.posix.fd_t, format: Drm.Format) !wl.Buffer {
         const dmabuf_params = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
         defer {
-            // dmabuf_params.destroy(state.wayland.sock_writer, .{}) catch |err| {
-            //     wl_log.warn("Failed to destroy dmabufparams object :: {s}", .{@errorName(err)});
-            // };
-            // state.wayland.interface_registry.remove(dmabuf_params);
+            // TODO: Destruction of buf params
         }
 
         try state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
@@ -626,9 +664,7 @@ fn handle_wl_events(state: *State) void {
                                     null,
                                     table.size,
                                     std.posix.PROT.READ,
-                                    .{
-                                        .TYPE = .PRIVATE,
-                                    },
+                                    .{ .TYPE = .PRIVATE },
                                     fd,
                                     0,
                                 ) catch |err| {
@@ -637,34 +673,7 @@ fn handle_wl_events(state: *State) void {
                                 };
                                 defer std.posix.munmap(table_data);
 
-                                // 16-byte pairs
-                                // 32-bit uint format
-                                // 4 bytes padding
-                                // 64-bit uint modifier
-                                var row_iter = std.mem.window(u8, table_data, 16, 16);
-                                while (row_iter.next()) |row| {
-                                    const format = std.mem.bytesToValue(u32, row[0..4]);
-                                    const mod = std.mem.bytesToValue(u64, row[8..16]);
-                                    const mod_val: Drm.ModifierValue = @bitCast(mod);
-
-                                    const format_tag = std.meta.intToEnum(Drm.Format, format) catch null;
-                                    const mod_tag = std.meta.intToEnum(Drm.Modifier, mod) catch null;
-                                    const mv_tag = std.meta.intToEnum(Drm.ModifierValue.Vendor, @as(u8, @intFromEnum(mod_val.vendor))) catch null;
-
-                                    const format_name = if (format_tag) |tag| @tagName(tag) else "Unknown";
-                                    const mod_name = if (mod_tag) |tag| @tagName(tag) else "Unknown";
-                                    const mv_name = if (mv_tag) |tag| @tagName(tag) else "Unknown";
-                                    app_log.info("Format: {s} ({d}),\tVendor: {s} ({d}),\tModifier: {s} ({d})", .{
-                                        format_name,
-                                        format,
-                                        mv_name,
-                                        @as(u8, @intFromEnum(mod_val.vendor)),
-                                        mod_name,
-                                        mod_val.code,
-                                    });
-
-                                    state.gfx_format.wl_format = .abgr8888;
-                                }
+                                state.gfx_format.wl_format = .abgr8888;
                             }
                         },
                         else => {

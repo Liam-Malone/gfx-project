@@ -18,10 +18,13 @@ fi
 
 # half baked
 wl_protocols=(linux_dmabuf wayland xdg_decorations xdg_shell)
-root_dir=$(pwd)
-mkdir -p build/bin
-mkdir -p build/tools
-mkdir -p build/shaders
+root_dir=$PWD
+bin_dir="$root_dir/build/bin"
+tools_dir="$root_dir/build/tools"
+shaders_dir="$root_dir/build/shaders"
+mkdir -p $bin_dir
+mkdir -p $tools_dir
+mkdir -p $shaders_dir
 
 if [ -v release ]; then
     echo "[Release Mode]"
@@ -32,6 +35,7 @@ else
 fi
 
 if [ -v nollvm ]; then build_flags="$build_flags -fno-llvm"; fi
+if [ -v time ]; then build_flags="$build_flag -ftime-report"; fi
 
 build_flags="$build_flags -O$build_mode"
 
@@ -53,8 +57,6 @@ compile="$ZIG build-exe $build_flags \
 --dep dmabuf \
 --dep zigimg \
 --dep vulkan \
---dep vertex_shader \
---dep fragment_shader \
 -Mroot=$root_dir/src/main.zig $build_flags \
 -Mwl_msg=$root_dir/src/wl_msg.zig $build_flags --dep wl_msg \
 -Mwayland=$root_dir/src/generated/wayland.zig $build_flags --dep wl_msg \
@@ -63,8 +65,6 @@ compile="$ZIG build-exe $build_flags \
 -Mdmabuf=$root_dir/src/generated/linux_dmabuf.zig \
 -Mzigimg=$root_dir/deps/zigimg/zigimg.zig \
 -Mvulkan=$root_dir/src/generated/vk.zig \
--Mvertex_shader=$root_dir/build/shaders/vert.spv \
--Mfragment_shader=$root_dir/build/shaders/frag.spv \
 -lc \
 -lvulkan \
 --cache-dir $root_dir/.zig-cache \
@@ -76,9 +76,8 @@ echo "[Compiling Shaders]"
 $vert_compile &&
 $frag_compile &&
 echo "[Compiling Program]" &&
-cd bin && $compile && if [ -v run ]; then ./$EXE_NAME ; fi
+cd bin && $compile && if [ -v run ]; then cd $root_dir && $root_dir/build/bin/$EXE_NAME ; fi
 
-if [ -f ./$EXE_NAME.o ]; then rm ./$EXE_NAME.o ; fi
+if [ -f $bin_dir/$EXE_NAME.o ]; then rm $bin_dir/$EXE_NAME.o ; fi
 
 cd $root
-
