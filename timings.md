@@ -2,10 +2,20 @@
 
 This document will track build timings over time, this should enable me to focus on keeping build times in-check, and track what factors may increase build times.
 
+
+## Compiler Version
+
+```shell
+$ zig version
+0.14.0-dev.2435+7575f2121
+```
+
+
 ## Time Consuming Factors
 
 - Vulkan Binding Generation (~1 second)
 - LLVM Code Emission (~1 second)
+
 
 ## Build Times (LLVM Backend)
 
@@ -178,7 +188,7 @@ This section will be for native x86 backend build timings.
 Currently nothing to log as the native x86 backend does not compile the program, failing with the following error:
 
 ```zig
-/src/wl_msg.zig:209:1: error: TODO: implement packed store of u352
+src/wl_msg.zig:209:1: error: TODO: implement packed store of u352
 fn write_control_msg(writer: anytype, msg_bytes: []const u8, fd: FileDescriptor) !void {
 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ```
