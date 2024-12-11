@@ -347,7 +347,7 @@ pub fn main() !void {
                 }, .@"inline");
 
                 vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
-                try vk_dev.wrapper.endCommandBuffer(cmd_buf);
+                vk_dev.wrapper.endCommandBuffer(cmd_buf) catch |err| break :exit err;
             }
 
             app_log.debug("Initial Queue Submission", .{});
@@ -363,8 +363,15 @@ pub fn main() !void {
             break :vk_state graphics_context;
         };
 
-        state.wayland.wl_buffer[0] = state.create_buffer(state.graphics_context.mem_fds[0], state.gfx_format.wl_format) catch |err| break :exit err;
-        state.wayland.wl_buffer[1] = state.create_buffer(state.graphics_context.mem_fds[1], state.gfx_format.wl_format) catch |err| break :exit err;
+        state.wayland.wl_buffer[0] = state.create_buffer(
+            state.graphics_context.mem_fds[0],
+            state.gfx_format.wl_format,
+        ) catch |err| break :exit err;
+
+        state.wayland.wl_buffer[1] = state.create_buffer(
+            state.graphics_context.mem_fds[1],
+            state.gfx_format.wl_format,
+        ) catch |err| break :exit err;
 
         state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
@@ -550,7 +557,13 @@ const State = struct {
     pub fn create_buffer(state: *State, fd: std.posix.fd_t, format: Drm.Format) !wl.Buffer {
         const dmabuf_params = try state.wayland.interface_registry.register(dmab.LinuxBufferParamsV1);
         defer {
-            // TODO: Destruction of buf params
+            state.wayland.interface_registry.remove(dmabuf_params);
+            dmabuf_params.destroy(state.wayland.sock_writer, .{}) catch |err| {
+                wl_log.err("Failed to Destroy DMABuf Params Object of id {d} :: {s}", .{
+                    dmabuf_params.id,
+                    @errorName(err),
+                });
+            };
         }
 
         try state.wayland.dmabuf.create_params(state.wayland.sock_writer, .{
@@ -566,8 +579,7 @@ const State = struct {
         });
 
         const wl_buffer = try state.wayland.interface_registry.register(wl.Buffer);
-        // TODO: add interface_registry.remove(global)
-        // errdefer state.wayland.interface_registry.remove(wl_buffer);
+        errdefer state.wayland.interface_registry.remove(wl_buffer);
 
         try dmabuf_params.create_immed(state.wayland.sock_writer, .{
             .buffer_id = wl_buffer.id,
@@ -767,12 +779,38 @@ const InterfaceType = enum {
         };
     }
 };
+
 const InterfaceRegistry = struct {
+    const IndexFreeQueue = struct {
+        buf: [QueueSize]u32 = [_]u32{0} ** QueueSize,
+        first: usize = 0,
+        last: usize = 0,
+
+        const QueueSize = 32;
+
+        pub fn push(q: *IndexFreeQueue, idx: u32) void {
+            q.buf[(q.last % QueueSize)] = idx;
+            q.last += 1;
+        }
+        pub fn next(q: *IndexFreeQueue) ?u32 {
+            const res = blk: {
+                if (q.buf[(q.first % QueueSize)] == 0) {
+                    break :blk null;
+                } else {
+                    defer q.first += 1;
+                    defer q.buf[(q.first % QueueSize)] = 0;
+                    break :blk q.buf[(q.first % QueueSize)];
+                }
+            };
+            return res;
+        }
+    };
+    const InterfaceMap = std.AutoHashMap(u32, InterfaceType);
+
     idx: u32,
     elems: InterfaceMap,
     registry: wl.Registry,
-
-    const InterfaceMap = std.AutoHashMap(u32, InterfaceType);
+    free_list: IndexFreeQueue = .{},
 
     pub fn init(arena: *Arena, registry: wl.Registry) !InterfaceRegistry {
         var map: InterfaceMap = InterfaceMap.init(arena.allocator());
@@ -797,37 +835,44 @@ const InterfaceRegistry = struct {
     }
 
     pub fn bind(self: *InterfaceRegistry, comptime T: type, writer: anytype, params: wl.Registry.Event.Global) !T {
-        defer self.idx += 1;
+        const idx = if (self.free_list.next()) |freed_id|
+            freed_id
+        else blk: {
+            defer self.idx += 1;
+            break :blk self.idx;
+        };
 
         try self.registry.bind(writer, .{
             .name = params.name,
             .id_interface = params.interface,
             .id_interface_version = params.version,
-            .id = self.idx,
+            .id = idx,
         });
 
-        try self.elems.put(self.idx, try .from_type(T));
+        try self.elems.put(idx, try .from_type(T));
         return .{
-            .id = self.idx,
+            .id = idx,
         };
     }
-    pub fn remove(self: *InterfaceRegistry, obj: anytype) void {
-        _ = self;
-        _ = obj;
-        // defer self.idx -= 1;
 
-        // app_log.info("Removing Object with id: {d}", .{self.idx});
-        // _ = self.elems.remove(obj.id);
+    pub fn remove(self: *InterfaceRegistry, obj: anytype) void {
+        self.free_list.push(obj.id);
+        _ = self.elems.remove(obj.id);
     }
 
     pub fn register(self: *InterfaceRegistry, comptime T: type) !T {
-        defer self.idx += 1;
+        const idx = if (self.free_list.next()) |freed_id|
+            freed_id
+        else blk: {
+            defer self.idx += 1;
+            break :blk self.idx;
+        };
 
-        app_log.info("Registering Interface: {s}, with id: {d}", .{ @typeName(T), self.idx });
+        app_log.info("Registering Interface: {s}, with id: {d}", .{ @typeName(T), idx });
 
-        try self.elems.put(self.idx, try .from_type(T));
+        try self.elems.put(idx, try .from_type(T));
         return .{
-            .id = self.idx,
+            .id = idx,
         };
     }
 };
