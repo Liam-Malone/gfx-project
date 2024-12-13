@@ -185,10 +185,3 @@ This section will be for LLVM build timings
 
 This section will be for native x86 backend build timings.
 
-Currently nothing to log as the native x86 backend does not compile the program, failing with the following error:
-
-```zig
-src/wl_msg.zig:209:1: error: TODO: implement packed store of u352
-fn write_control_msg(writer: anytype, msg_bytes: []const u8, fd: FileDescriptor) !void {
-^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-```
