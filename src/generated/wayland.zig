@@ -475,7 +475,7 @@ pub const Shm = struct {
         /// pool to create
         id: u32,
         /// file descriptor for the pool
-        fd: wl_msg.FileDescriptor,
+        fd: std.posix.fd_t,
         /// pool size, in bytes
         size: i32,
     };
@@ -574,7 +574,7 @@ pub const DataOffer = struct {
         /// mime type desired by receiver
         mime_type: [:0]const u8,
         /// file descriptor for data transfer
-        fd: wl_msg.FileDescriptor,
+        fd: std.posix.fd_t,
     };
 
     /// request that the data is transferred
@@ -701,7 +701,7 @@ pub const DataSource = struct {
         /// send the data
         pub const Send = struct {
             mime_type: [:0]const u8,
-            fd: wl_msg.FileDescriptor,
+            fd: std.posix.fd_t,
         };
 
         /// selection was cancelled
@@ -1705,7 +1705,7 @@ pub const Keyboard = struct {
         /// keyboard mapping
         pub const Keymap = struct {
             format: Keyboard.KeymapFormat,
-            fd: wl_msg.FileDescriptor,
+            fd: std.posix.fd_t,
             size: u32,
         };
 

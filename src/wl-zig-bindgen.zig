@@ -22,7 +22,7 @@ const Type = enum {
     }
     pub fn to_zig_type_string(self: Type) ?[]const u8 {
         return switch (self) {
-            .fd => "wl_msg.FileDescriptor", // fd will be sent through cmsg, not main send
+            .fd => "std.posix.fd_t", // fd will be sent through cmsg, not main send
             .int => "i32",
             .fixed => "f32",
             .array => "[]const u8",

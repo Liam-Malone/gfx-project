@@ -20,8 +20,6 @@ pub const Header = packed struct(u64) {
     pub const Size: u16 = @sizeOf(@This());
 };
 
-pub const FileDescriptor = std.posix.fd_t;
-
 const EventParser = struct {
     buf: []const u8,
 
@@ -144,10 +142,10 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
     try writer.writeStruct(header);
 
     if (@hasField(T, "fd")) {
-        const msg_len = @sizeOf(T) - @sizeOf(FileDescriptor);
+        const msg_len = @sizeOf(T) - @sizeOf(std.posix.fd_t);
         var msg: [msg_len]u8 = undefined;
         var idx: usize = 0;
-        var fd: FileDescriptor = undefined;
+        var fd: std.posix.fd_t = undefined;
         inline for (std.meta.fields(@TypeOf(item))) |field| {
             const val = @field(item, field.name);
             if (std.mem.eql(u8, field.name, "fd")) {
@@ -159,7 +157,7 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
             }
         }
 
-        try write_control_msg(writer, &msg, fd);
+        try write_control_msg(writer.context.handle, &msg, fd);
         return;
     }
 
@@ -206,7 +204,7 @@ fn write_str(writer: anytype, str: [:0]const u8) !void {
     try write_arr(writer, @ptrCast(str[0 .. str.len + 1]));
 }
 
-fn write_control_msg(writer: anytype, msg_bytes: []const u8, fd: FileDescriptor) !void {
+fn write_control_msg(sock: std.posix.socket_t, msg_bytes: []const u8, fd: std.posix.fd_t) !void {
     const control_msg: cmsg(@TypeOf(fd)) = .{
         .level = std.posix.SOL.SOCKET,
         .type = SCM_RIGHTS,

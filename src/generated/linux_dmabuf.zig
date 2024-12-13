@@ -153,7 +153,7 @@ pub const LinuxBufferParamsV1 = struct {
     pub const add_params = struct {
         pub const op = 1;
         /// dmabuf fd
-        fd: wl_msg.FileDescriptor,
+        fd: std.posix.fd_t,
         /// plane index
         plane_idx: u32,
         /// offset in bytes
@@ -291,7 +291,7 @@ pub const LinuxDmabufFeedbackV1 = struct {
 
         /// format and modifier table
         pub const FormatTable = struct {
-            fd: wl_msg.FileDescriptor,
+            fd: std.posix.fd_t,
             size: u32,
         };
 
