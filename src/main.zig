@@ -203,7 +203,7 @@ pub fn main() !void {
                     .wl_ev_iter = wl_event_it,
                     .sock_writer = sock_writer,
                     .wl_surface = wl_surface,
-                    .wl_buffer = undefined,
+                    .wl_buffers = undefined,
                     .xdg_surface = xdg_surface,
                     .xdg_toplevel = xdg_toplevel,
                     .decoration_toplevel = decoration_toplevel,
@@ -363,12 +363,12 @@ pub fn main() !void {
             break :vk_state graphics_context;
         };
 
-        state.wayland.wl_buffer[0] = state.create_buffer(
+        state.wayland.wl_buffers[0] = state.create_buffer(
             state.graphics_context.mem_fds[0],
             state.gfx_format.wl_format,
         ) catch |err| break :exit err;
 
-        state.wayland.wl_buffer[1] = state.create_buffer(
+        state.wayland.wl_buffers[1] = state.create_buffer(
             state.graphics_context.mem_fds[1],
             state.gfx_format.wl_format,
         ) catch |err| break :exit err;
@@ -376,7 +376,7 @@ pub fn main() !void {
         state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
         state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
-            .buffer = state.wayland.wl_buffer[0].id,
+            .buffer = state.wayland.wl_buffers[0].id,
             .x = 0,
             .y = 0,
         }) catch |err| break :exit err;
@@ -454,7 +454,7 @@ pub fn main() !void {
                     }) catch |err| break :exit err;
 
                     state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
-                        .buffer = state.wayland.wl_buffer[0].id,
+                        .buffer = state.wayland.wl_buffers[0].id,
                         .x = 0,
                         .y = 0,
                     }) catch |err| break :exit err;
@@ -486,7 +486,7 @@ const State = struct {
         wl_ev_iter: EventIt(4096),
         sock_writer: std.net.Stream.Writer,
         wl_surface: wl.Surface,
-        wl_buffer: [2]wl.Buffer,
+        wl_buffers: [2]wl.Buffer,
         xdg_surface: xdg.Surface,
         xdg_toplevel: ?xdg.Toplevel,
         decoration_toplevel: xdgd.ToplevelDecorationV1,
@@ -514,7 +514,7 @@ const State = struct {
                 defer wl_state.socket_closed = true;
                 defer wl_state.wl_socket.close();
 
-                for (wl_state.wl_buffer, 0..) |buf, idx| {
+                for (wl_state.wl_buffers, 0..) |buf, idx| {
                     buf.destroy(wl_state.sock_writer, .{}) catch |err| {
                         wl_log.err("Failed to send destroy signal to wl_buffer[{d}]:: Error: {s}", .{ idx, @errorName(err) });
                     };
@@ -1126,8 +1126,8 @@ fn EventIt(comptime buf_size: comptime_int) type {
 
 const cmsg = wl_msg.cmsg;
 const SCM_RIGHTS = 0x01;
-fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?wl_msg.FileDescriptor {
-    var cmsg_buf: [cmsg(wl_msg.FileDescriptor).Size * 12]u8 = undefined;
+fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?std.posix.fd_t {
+    var cmsg_buf: [cmsg(std.posix.fd_t).Size * 12]u8 = undefined;
 
     var iov = [_]std.posix.iovec{
         .{
@@ -1159,7 +1159,7 @@ fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?wl_msg.FileDescriptor {
             var offset: usize = 0;
             while (offset + cmsg_size <= msg.controllen) {
                 const ctrl_buf: [*]u8 = @ptrCast(msg.control.?);
-                const ctrl_msg: *align(1) cmsg(wl_msg.FileDescriptor) = @ptrCast(@alignCast(ctrl_buf[offset..][0..64]));
+                const ctrl_msg: *align(1) cmsg(std.posix.fd_t) = @ptrCast(@alignCast(ctrl_buf[offset..][0..64]));
 
                 if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == SCM_RIGHTS)
                     break :res ctrl_msg.data;

@@ -229,15 +229,16 @@ fn write_control_msg(sock: std.posix.socket_t, msg_bytes: []const u8, fd: std.po
         .flags = 0,
     };
 
-    _ = try std.posix.sendmsg(writer.context.handle, &sock_msg, 0);
+    _ = try std.posix.sendmsg(sock, &sock_msg, 0);
 }
 
 /// Create data container for control messages
 pub fn cmsg(comptime T: type) type {
-    const msg_size = cmsg_space(@sizeOf(T));
-    const padded_bit_count = 8 * (msg_size - (@sizeOf(c_ulonglong) + (2 * @sizeOf(c_int)) + @sizeOf(T)));
+    const msg_size = cmsg_len(@sizeOf(T));
+    const padded_bit_count = ((8 * msg_size) - (@bitSizeOf(c_ulong) + (2 * @bitSizeOf(c_int)) + @bitSizeOf(T)));
+
     return packed struct {
-        len: c_ulonglong = cmsg_len(@sizeOf(T)),
+        len: c_ulong = cmsg_len(@sizeOf(T)),
         level: c_int,
         type: c_int,
         data: T,
@@ -253,16 +254,8 @@ pub fn cmsg(comptime T: type) type {
 /// Macro Definition:
 /// #define CMSG_ALIGN(len) (((len) + sizeof (size_t) - 1) & (size_t) ~(sizeof (size_t) - 1))
 fn cmsg_align(len: usize) usize {
-    const size_t = c_ulonglong;
+    const size_t = c_ulong;
     return (((len) + @sizeOf(size_t) - 1) & ~(@as(usize, @sizeOf(size_t) - 1)));
-}
-
-/// Ported version of musl libc's CMSG_SPACE macro for getting space of a Control Message
-///
-/// Macro Definition:
-/// #define CMSG_SPACE(len) (CMSG_ALIGN (len) + CMSG_ALIGN (sizeof (struct cmsghdr)))
-fn cmsg_space(len: usize) usize {
-    return cmsg_align(len) + cmsg_align(@sizeOf(std.posix.msghdr));
 }
 
 /// Ported version of musl libc's CMSG_LEN macro for getting length of a Control Message
@@ -270,7 +263,7 @@ fn cmsg_space(len: usize) usize {
 /// Macro Definition:
 /// #define CMSG_LEN(len)   (CMSG_ALIGN (sizeof (struct cmsghdr)) + (len))
 fn cmsg_len(len: usize) usize {
-    return cmsg_align(@sizeOf(std.posix.msghdr) + len);
+    return cmsg_align(@sizeOf(c_ulong) + (2 * @sizeOf(i32)) + len);
 }
 
 fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
