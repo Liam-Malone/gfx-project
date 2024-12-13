@@ -6,7 +6,7 @@ for arg in "$@"; do declare $arg='1'; done
 if ! [ -v release ]; then declare debug='1'; fi
 
 # condition checks
-if ! [ -v EXE_NAME ]; then declare EXE_NAME='Zig-Gfx'; fi
+if ! [ -v EXE_NAME ]; then declare EXE_NAME='Gfx-Project'; fi
 if ! [ -v ZIG ]; then # this is to alias compiler to v0.14.0-dev...
     if command -v zig &>/dev/null ; then 
         ZIG=zig
@@ -34,8 +34,9 @@ else
     build_mode='Debug'
 fi
 
-if [ -v nollvm ]; then build_flags="$build_flags -fno-llvm"; fi
-if [ -v time ]; then build_flags="$build_flag -ftime-report"; fi
+if [ -v nollvm ]; then build_flags="$build_flags -fno-llvm -fno-lld"; fi
+if [ -v time ]; then build_flags="$build_flags -ftime-report"; fi
+if [ -v debug_rt ]; then build_flags="$build_flags --debug-rt"; fi
 
 build_flags="$build_flags -O$build_mode"
 
@@ -55,7 +56,6 @@ compile="$ZIG build-exe $build_flags \
 --dep xdg_shell \
 --dep xdg_decoration \
 --dep dmabuf \
---dep zigimg \
 --dep vulkan \
 -Mroot=$root_dir/src/main.zig $build_flags \
 -Mwl_msg=$root_dir/src/wl_msg.zig $build_flags --dep wl_msg \
@@ -63,7 +63,6 @@ compile="$ZIG build-exe $build_flags \
 -Mxdg_shell=$root_dir/src/generated/xdg_shell.zig $build_flags --dep wl_msg \
 -Mxdg_decoration=$root_dir/src/generated/xdg_decorations.zig $build_flags --dep wl_msg \
 -Mdmabuf=$root_dir/src/generated/linux_dmabuf.zig \
--Mzigimg=$root_dir/deps/zigimg/zigimg.zig \
 -Mvulkan=$root_dir/src/generated/vk.zig \
 -lc \
 -lvulkan \

@@ -27,6 +27,9 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const use_llvm = b.option(bool, "use-llvm", "Whether or not to use the LLVM compiler backend") orelse true;
+    const use_lld = b.option(bool, "use-lld", "Whether or not to use LLD as the linker") orelse use_llvm;
+
     // BEGIN Wayland-Bindings
     const wl_msg_module = b.addModule("wl_msg", .{
         .root_source_file = b.path("src/wl_msg.zig"),
@@ -39,6 +42,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/wl-zig-bindgen.zig"),
         .target = target,
         .optimize = optimize,
+        .use_llvm = use_llvm,
+        .use_lld = use_lld,
     });
 
     const bindings_generator: BindingsGenerator = .{
@@ -55,17 +60,14 @@ pub fn build(b: *std.Build) !void {
     const linux_dmabuf_bindings = bindings_generator.gen_bindings("linux_dmabuf.zig", b.path("protocols/wayland/linux-dmabuf-v1.xml"));
     // END Wayland-Bindings
 
-    const zigimg_dependency = b.dependency("zigimg", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
     const exe = b.addExecutable(.{
-        .name = "GfxLearning",
+        .name = "Gfx-Project",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .use_llvm = use_llvm,
+        .use_lld = use_lld,
     });
 
     // TODO: Add windows and eventually macos support
@@ -82,8 +84,6 @@ pub fn build(b: *std.Build) !void {
             std.process.exit(1);
         },
     }
-
-    exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 
     if (b.lazyDependency("vulkan-zig", .{
         .target = target,
@@ -124,7 +124,6 @@ pub fn build(b: *std.Build) !void {
             std.process.exit(1);
         },
     }
-    exe_unit_tests.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 
     const test_step = b.step("test", "Run Tests");
     test_step.dependOn(&run_exe_unit_tests.step);
