@@ -36,7 +36,6 @@ fi
 
 if [ -v nollvm ]; then build_flags="$build_flags -fno-llvm -fno-lld"; fi
 if [ -v time ]; then build_flags="$build_flags -ftime-report"; fi
-if [ -v debug_rt ]; then build_flags="$build_flags --debug-rt"; fi
 
 build_flags="$build_flags -O$build_mode"
 
