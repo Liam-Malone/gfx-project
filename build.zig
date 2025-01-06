@@ -10,6 +10,7 @@ const BindingsGenerator = struct {
     pub fn gen_bindings(self: *const BindingsGenerator, name: []const u8, xml_spec: std.Build.LazyPath) *std.Build.Module {
         const binding_gen_run = self.b.addRunArtifact(self.binding_gen);
         binding_gen_run.addFileArg(xml_spec);
+        binding_gen_run.addArg("--out");
         const bindings = binding_gen_run.addOutputFileArg(name);
 
         const bindings_module = self.b.addModule("bindings", .{
@@ -54,12 +55,14 @@ pub fn build(b: *std.Build) !void {
         .binding_gen = bindgen,
     };
 
-    const wayland_bindings = bindings_generator.gen_bindings("wayland.zig", b.path("protocols/wayland/wayland.xml"));
-    const xdg_shell_bindings = bindings_generator.gen_bindings("xdg_shell.zig", b.path("protocols/wayland/xdg-shell.xml"));
-    const xdg_decoration_bindings = bindings_generator.gen_bindings("xdg_decorations.zig", b.path("protocols/wayland/xdg-decoration-unstable-v1.xml"));
-    const linux_dmabuf_bindings = bindings_generator.gen_bindings("linux_dmabuf.zig", b.path("protocols/wayland/linux-dmabuf-v1.xml"));
-    // END Wayland-Bindings
+    const protocols = [_]std.Build.LazyPath{
+        b.path("protocols/wayland/wayland.xml"),
+        b.path("protocols/wayland/xdg-shell.xml"),
+        b.path("protocols/wayland/xdg-decoration-unstable-v1.xml"),
+        b.path("protocols/wayland/linux-dmabuf-v1.xml"),
+    };
 
+    // END Wayland-Bindings
     const exe = b.addExecutable(.{
         .name = "Gfx-Project",
         .root_source_file = b.path("src/main.zig"),
@@ -74,10 +77,18 @@ pub fn build(b: *std.Build) !void {
     switch (target.result.os.tag) {
         .linux => {
             exe.root_module.addImport("wl_msg", wl_msg_module);
-            exe.root_module.addImport("wayland", wayland_bindings);
-            exe.root_module.addImport("xdg_shell", xdg_shell_bindings);
-            exe.root_module.addImport("xdg_decoration", xdg_decoration_bindings);
-            exe.root_module.addImport("dmabuf", linux_dmabuf_bindings);
+            for (protocols) |protocol| {
+                const prot = protocol.getPath(b);
+                var start_idx: usize = 0;
+                var end_idx: usize = 0;
+                for (prot, 0..) |char, idx| {
+                    if (char == '/') start_idx = idx + 1;
+                    if (char == '.') end_idx = idx;
+                }
+
+                const protocol_mod: *std.Build.Module = bindings_generator.gen_bindings(prot[start_idx..end_idx], protocol);
+                exe.root_module.addImport(prot[start_idx..end_idx], protocol_mod);
+            }
         },
         else => {
             std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
@@ -113,11 +124,18 @@ pub fn build(b: *std.Build) !void {
     // TODO: Add windows and eventually macos support
     switch (target.result.os.tag) {
         .linux => {
-            exe_unit_tests.root_module.addImport("wl_msg", wl_msg_module);
-            exe_unit_tests.root_module.addImport("wayland", wayland_bindings);
-            exe_unit_tests.root_module.addImport("xdg_shell", xdg_shell_bindings);
-            exe_unit_tests.root_module.addImport("xdg_decoration", xdg_decoration_bindings);
-            exe_unit_tests.root_module.addImport("dmabuf", linux_dmabuf_bindings);
+            for (protocols) |protocol| {
+                const prot = protocol.getPath(b);
+                var start_idx: usize = 0;
+                var end_idx: usize = 0;
+                for (prot, 0..) |char, idx| {
+                    if (char == '/') start_idx = idx + 1;
+                    if (char == '.') end_idx = idx;
+                }
+
+                const protocol_mod = bindings_generator.gen_bindings(prot[start_idx..end_idx], protocol);
+                exe.root_module.addImport(prot[start_idx..end_idx], protocol_mod);
+            }
         },
         else => {
             std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});

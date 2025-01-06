@@ -11,8 +11,10 @@ const wl_msg = @import("wl_msg"); // It's assumed that the user provides this mo
 
 /// core global object
 pub const Display = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_display";
+
     version: u32 = 1,
+    id: u32,
 
     /// global error values
     pub const Error = enum(u32) {
@@ -76,8 +78,10 @@ pub const Display = struct {
 
 /// global registry object
 pub const Registry = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_registry";
+
     version: u32 = 1,
+    id: u32,
 
     pub const bind_params = struct {
         pub const op = 0;
@@ -123,8 +127,10 @@ pub const Registry = struct {
 
 /// callback object
 pub const Callback = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_callback";
+
     version: u32 = 1,
+    id: u32,
     pub const Event = union(enum) {
         done: Event.Done,
 
@@ -146,8 +152,10 @@ pub const Callback = struct {
 
 /// the compositor singleton
 pub const Compositor = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_compositor";
+
     version: u32 = 6,
+    id: u32,
 
     pub const create_surface_params = struct {
         pub const op = 0;
@@ -174,8 +182,10 @@ pub const Compositor = struct {
 
 /// a shared memory pool
 pub const ShmPool = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_shm_pool";
+
     version: u32 = 2,
+    id: u32,
 
     pub const create_buffer_params = struct {
         pub const op = 0;
@@ -221,8 +231,10 @@ pub const ShmPool = struct {
 
 /// shared memory support
 pub const Shm = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_shm";
+
     version: u32 = 2,
+    id: u32,
 
     /// wl_shm error values
     pub const Error = enum(u32) {
@@ -514,8 +526,10 @@ pub const Shm = struct {
 
 /// content for a wl_surface
 pub const Buffer = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_buffer";
+
     version: u32 = 1,
+    id: u32,
 
     pub const destroy_params = struct {
         pub const op = 0;
@@ -544,8 +558,10 @@ pub const Buffer = struct {
 
 /// offer to transfer data
 pub const DataOffer = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_data_offer";
+
     version: u32 = 3,
+    id: u32,
     pub const Error = enum(u32) {
         /// finish request was called untimely
         invalid_finish = 0,
@@ -647,8 +663,10 @@ pub const DataOffer = struct {
 
 /// offer to transfer data
 pub const DataSource = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_data_source";
+
     version: u32 = 3,
+    id: u32,
     pub const Error = enum(u32) {
         /// action mask contains invalid values
         invalid_action_mask = 0,
@@ -736,8 +754,10 @@ pub const DataSource = struct {
 
 /// data transfer device
 pub const DataDevice = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_data_device";
+
     version: u32 = 3,
+    id: u32,
     pub const Error = enum(u32) {
         /// given wl_surface has another role
         role = 0,
@@ -840,8 +860,10 @@ pub const DataDevice = struct {
 
 /// data transfer interface
 pub const DataDeviceManager = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_data_device_manager";
+
     version: u32 = 3,
+    id: u32,
 
     /// drag and drop actions
     pub const DndAction = packed struct(u32) {
@@ -909,8 +931,10 @@ pub const DataDeviceManager = struct {
 
 /// create desktop-style surfaces
 pub const Shell = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_shell";
+
     version: u32 = 1,
+    id: u32,
     pub const Error = enum(u32) {
         /// given wl_surface has another role
         role = 0,
@@ -931,8 +955,10 @@ pub const Shell = struct {
 
 /// desktop-style metadata interface
 pub const ShellSurface = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_shell_surface";
+
     version: u32 = 1,
+    id: u32,
 
     /// edge values for resizing
     pub const Resize = packed struct(u32) {
@@ -1193,8 +1219,10 @@ pub const ShellSurface = struct {
 
 /// an onscreen surface
 pub const Surface = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_surface";
+
     version: u32 = 6,
+    id: u32,
 
     /// wl_surface error values
     pub const Error = enum(u32) {
@@ -1385,8 +1413,10 @@ pub const Surface = struct {
 
 /// group of input devices
 pub const Seat = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_seat";
+
     version: u32 = 10,
+    id: u32,
 
     /// seat capability bitmask
     pub const Capability = packed struct(u32) {
@@ -1500,8 +1530,10 @@ pub const Seat = struct {
 
 /// pointer input device
 pub const Pointer = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_pointer";
+
     version: u32 = 10,
+    id: u32,
     pub const Error = enum(u32) {
         /// given wl_surface has another role
         role = 0,
@@ -1667,8 +1699,10 @@ pub const Pointer = struct {
 
 /// keyboard input device
 pub const Keyboard = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_keyboard";
+
     version: u32 = 10,
+    id: u32,
 
     /// keyboard mapping format
     pub const KeymapFormat = enum(u32) {
@@ -1763,8 +1797,10 @@ pub const Keyboard = struct {
 
 /// touchscreen input device
 pub const Touch = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_touch";
+
     version: u32 = 10,
+    id: u32,
 
     pub const release_params = struct {
         pub const op = 0;
@@ -1846,8 +1882,10 @@ pub const Touch = struct {
 
 /// compositor output region
 pub const Output = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_output";
+
     version: u32 = 4,
+    id: u32,
 
     /// subpixel geometry information
     pub const Subpixel = enum(u32) {
@@ -1992,8 +2030,10 @@ pub const Output = struct {
 
 /// region interface
 pub const Region = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_region";
+
     version: u32 = 1,
+    id: u32,
 
     pub const destroy_params = struct {
         pub const op = 0;
@@ -2041,8 +2081,10 @@ pub const Region = struct {
 
 /// sub-surface compositing
 pub const Subcompositor = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_subcompositor";
+
     version: u32 = 1,
+    id: u32,
     pub const Error = enum(u32) {
         /// the to-be sub-surface is invalid
         bad_surface = 0,
@@ -2076,8 +2118,10 @@ pub const Subcompositor = struct {
 
 /// sub-surface interface to a wl_surface
 pub const Subsurface = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "wl_subsurface";
+
     version: u32 = 1,
+    id: u32,
     pub const Error = enum(u32) {
         /// wl_surface is not a sibling or the parent
         bad_surface = 0,

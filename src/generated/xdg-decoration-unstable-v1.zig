@@ -11,8 +11,10 @@ const wl_msg = @import("wl_msg"); // It's assumed that the user provides this mo
 
 /// window decoration manager
 pub const DecorationManagerV1 = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "zxdg_decoration_manager_v1";
+
     version: u32 = 1,
+    id: u32,
 
     pub const destroy_params = struct {
         pub const op = 0;
@@ -37,8 +39,10 @@ pub const DecorationManagerV1 = struct {
 
 /// decoration object for a toplevel surface
 pub const ToplevelDecorationV1 = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "zxdg_toplevel_decoration_v1";
+
     version: u32 = 1,
+    id: u32,
     pub const Error = enum(u32) {
         /// xdg_toplevel has a buffer attached before configure
         unconfigured_buffer = 0,

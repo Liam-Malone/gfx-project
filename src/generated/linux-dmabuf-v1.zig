@@ -11,8 +11,10 @@ const wl_msg = @import("wl_msg"); // It's assumed that the user provides this mo
 
 /// factory for creating dmabuf-based wl_buffers
 pub const LinuxDmabufV1 = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "zwp_linux_dmabuf_v1";
+
     version: u32 = 5,
+    id: u32,
 
     pub const destroy_params = struct {
         pub const op = 0;
@@ -84,8 +86,10 @@ pub const LinuxDmabufV1 = struct {
 
 /// parameters for creating a dmabuf-based wl_buffer
 pub const LinuxBufferParamsV1 = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "zwp_linux_buffer_params_v1";
+
     version: u32 = 5,
+    id: u32,
     pub const Error = enum(u32) {
         /// the dmabuf_batch object has already been used to create a wl_buffer
         already_used = 0,
@@ -232,8 +236,10 @@ pub const LinuxBufferParamsV1 = struct {
 
 /// dmabuf feedback
 pub const LinuxDmabufFeedbackV1 = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "zwp_linux_dmabuf_feedback_v1";
+
     version: u32 = 5,
+    id: u32,
     pub const TrancheFlags = packed struct(u32) {
         /// direct scan-out tranche
         scanout: bool = false,

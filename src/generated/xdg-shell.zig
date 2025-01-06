@@ -11,8 +11,10 @@ const wl_msg = @import("wl_msg"); // It's assumed that the user provides this mo
 
 /// create desktop-style surfaces
 pub const WmBase = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "xdg_wm_base";
+
     version: u32 = 6,
+    id: u32,
     pub const Error = enum(u32) {
         /// given wl_surface has another role
         role = 0,
@@ -90,8 +92,10 @@ pub const WmBase = struct {
 
 /// child surface positioner
 pub const Positioner = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "xdg_positioner";
+
     version: u32 = 6,
+    id: u32,
     pub const Error = enum(u32) {
         /// invalid input provided
         invalid_input = 0,
@@ -274,8 +278,10 @@ pub const Positioner = struct {
 
 /// desktop user interface surface base interface
 pub const Surface = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "xdg_surface";
+
     version: u32 = 6,
+    id: u32,
     pub const Error = enum(u32) {
         /// Surface was not fully constructed
         not_constructed = 1,
@@ -365,8 +371,10 @@ pub const Surface = struct {
 
 /// toplevel surface
 pub const Toplevel = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "xdg_toplevel";
+
     version: u32 = 6,
+    id: u32,
     pub const Error = enum(u32) {
         /// provided value is not a valid variant of the resize_edge enum
         invalid_resize_edge = 0,
@@ -607,8 +615,10 @@ pub const Toplevel = struct {
 
 /// short-lived, popup surfaces for menus
 pub const Popup = struct {
-    id: u32,
+    pub const name: [:0]const u8 = "xdg_popup";
+
     version: u32 = 6,
+    id: u32,
     pub const Error = enum(u32) {
         /// tried to grab after being mapped
         invalid_grab = 0,

@@ -3,9 +3,9 @@ const builtin = @import("builtin");
 
 const wl_msg = @import("wl_msg");
 const wl = @import("wayland");
-const dmab = @import("dmabuf");
-const xdg = @import("xdg_shell");
-const xdgd = @import("xdg_decoration");
+const dmab = @import("linux-dmabuf-v1");
+const xdg = @import("xdg-shell");
+const xdgd = @import("xdg-decoration-unstable-v1");
 
 const wl_log = std.log.scoped(.wayland);
 const Header = wl_msg.Header;
@@ -91,40 +91,31 @@ pub fn main() !void {
                             if (action_opt) |action|
                                 switch (action) {
                                     .global => |global| {
-                                        const desired_interfaces = enum {
-                                            nil_opt,
-                                            wl_seat,
-                                            wl_compositor,
-                                            xdg_wm_base,
-                                            zxdg_decoration_manager_v1,
-                                            zwp_linux_dmabuf_v1,
-                                        };
-                                        const interface_name = std.meta.stringToEnum(desired_interfaces, global.interface) orelse blk: {
-                                            app_log.debug("Unused interface: {s}", .{global.interface});
-                                            break :blk .nil_opt;
-                                        };
-                                        switch (interface_name) {
-                                            .nil_opt => {}, // do nothing,
-                                            .wl_seat => wl_seat_opt = interface_registry.bind(wl.Seat, sock_writer, global) catch |err| nil: {
+                                        if (std.mem.eql(u8, global.interface, wl.Seat.name)) {
+                                            wl_seat_opt = interface_registry.bind(wl.Seat, sock_writer, global) catch |err| nil: {
                                                 app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                                 break :nil null;
-                                            },
-                                            .wl_compositor => compositor_opt = interface_registry.bind(wl.Compositor, sock_writer, global) catch |err| nil: {
+                                            };
+                                        } else if (std.mem.eql(u8, global.interface, wl.Compositor.name)) {
+                                            compositor_opt = interface_registry.bind(wl.Compositor, sock_writer, global) catch |err| nil: {
                                                 app_log.err("Failed to bind compositor with error: {s}", .{@errorName(err)});
                                                 break :nil null;
-                                            },
-                                            .xdg_wm_base => xdg_wm_base_opt = interface_registry.bind(xdg.WmBase, sock_writer, global) catch |err| nil: {
+                                            };
+                                        } else if (std.mem.eql(u8, global.interface, xdg.WmBase.name)) {
+                                            xdg_wm_base_opt = interface_registry.bind(xdg.WmBase, sock_writer, global) catch |err| nil: {
                                                 app_log.err("Failed to bind xdg_wm_base with error: {s}", .{@errorName(err)});
                                                 break :nil null;
-                                            },
-                                            .zxdg_decoration_manager_v1 => xdg_decoration_opt = interface_registry.bind(xdgd.DecorationManagerV1, sock_writer, global) catch |err| nil: {
+                                            };
+                                        } else if (std.mem.eql(u8, global.interface, xdgd.DecorationManagerV1.name)) {
+                                            xdg_decoration_opt = interface_registry.bind(xdgd.DecorationManagerV1, sock_writer, global) catch |err| nil: {
                                                 app_log.err("Failed to bind zxdg__decoration_manager with error: {s}", .{@errorName(err)});
                                                 break :nil null;
-                                            },
-                                            .zwp_linux_dmabuf_v1 => dmabuf_opt = interface_registry.bind(dmab.LinuxDmabufV1, sock_writer, global) catch |err| nil: {
+                                            };
+                                        } else if (std.mem.eql(u8, global.interface, dmab.LinuxDmabufV1.name)) {
+                                            dmabuf_opt = interface_registry.bind(dmab.LinuxDmabufV1, sock_writer, global) catch |err| nil: {
                                                 app_log.err("Failed to bind linux_dmabuf with error: {s}", .{@errorName(err)});
                                                 break :nil null;
-                                            },
+                                            };
                                         }
                                     },
                                     .global_remove => {

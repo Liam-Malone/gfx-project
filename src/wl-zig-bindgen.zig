@@ -67,12 +67,15 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
         // ------------------------ BEGIN INTERFACE ------------------------
         try writer.print(
             \\pub const {s} = struct {{
-            \\    id: u32,
+            \\    pub const name: [:0]const u8 = "{s}";
+            \\
             \\    version: u32 = {s},
+            \\    id: u32,
             \\
         ,
             .{
                 snakeToPascal(name),
+                interface_name,
                 interface_version,
             },
         );
@@ -351,11 +354,13 @@ pub fn main() !void {
     var args = std.process.argsWithAllocator(allocator) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM"),
     };
-    const prog_name = args.next() orelse "wayland-zig-generator";
+    const prog_name = args.next() orelse "wl-zig-bindgen";
 
-    var xml_opt: ?[]const u8 = null;
-    var out_opt: ?[]const u8 = null;
+    var xml_opts = std.ArrayList([]const u8).init(arena.allocator());
+    var file_outs = std.ArrayList(?[]const u8).init(arena.allocator());
+    var file_in = true;
     var debug = false;
+    var out_pref_opt: ?[]const u8 = null;
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
@@ -363,82 +368,99 @@ pub fn main() !void {
                 std.log.err("Failed to write to stdout with err: {s}", .{@errorName(err)});
             };
             std.process.exit(1);
+        } else if (std.mem.eql(u8, arg, "--out")) {
+            file_in = false;
         } else if (std.mem.eql(u8, arg, "--debug")) {
             try stdout.print("[debug mode]\n", .{});
             debug = true;
-        } else if (xml_opt == null) {
-            xml_opt = arg;
-        } else if (out_opt == null) {
-            out_opt = arg;
+        } else if (std.mem.eql(u8, arg, "--prefix") or std.mem.eql(u8, arg, "-p")) {
+            out_pref_opt = args.next() orelse blk: {
+                help_msg(prog_name) catch |err| {
+                    std.log.err("Failed to write to stdout with err: {s}", .{@errorName(err)});
+                };
+                break :blk null;
+            };
         } else {
-            try help_msg(prog_name);
+            if (file_in) try xml_opts.append(arg) else try file_outs.append(arg);
         }
     }
 
-    const xml_file = xml_opt orelse {
-        help_msg(prog_name) catch |err| {
-            std.log.err("Failed to write to stdout with err: {s}", .{@errorName(err)});
+    while (file_outs.items.len < xml_opts.items.len) {
+        try file_outs.append(null);
+    }
+
+    for (xml_opts.items, 0..) |xml_file, i| {
+        const out_file = if (file_outs.items[i]) |out| out else blk: {
+            var start: usize = 0;
+            var end: usize = xml_file.len - 1;
+            for (xml_file, 0..) |char, idx| {
+                if (char == '/') start = idx + 1;
+                if (char == '.') end = idx;
+            }
+
+            const file_ext = ".zig";
+            var buf = arena.push(u8, (end - start) + file_ext.len);
+            @memcpy(buf[0 .. end - start], xml_file[start..end]);
+            @memcpy(buf[end - start ..], file_ext);
+            break :blk buf;
         };
-        std.process.exit(1);
-    };
 
-    const out_file = out_opt orelse {
-        help_msg(prog_name) catch |err| {
-            std.log.err("Failed to write to stdout with err: {s}", .{@errorName(err)});
-        };
-        std.process.exit(1);
-    };
-
-    const cwd = std.fs.cwd();
-    const xml_src = cwd.readFileAlloc(allocator, xml_file, std.math.maxInt(usize)) catch |err| {
-        std.log.err("Failed to open input file '{s}' with err: {s}", .{ xml_file, @errorName(err) });
-        std.process.exit(1);
-    };
-
-    var out_buf = std.ArrayList(u8).init(allocator);
-    generate(allocator, xml_file, xml_src, out_buf.writer()) catch |err| {
-        std.log.err("XML parse err: {s}", .{@errorName(err)});
-    };
-    out_buf.append(0) catch @panic("oom");
-    const src = out_buf.items[0 .. out_buf.items.len - 1 :0];
-    const tree = std.zig.Ast.parse(allocator, src, .zig) catch |err| switch (err) {
-        error.OutOfMemory => @panic("oom"),
-    };
-
-    const formatted = if (tree.errors.len > 0) blk: {
-        std.log.err("generated invalid zig code", .{});
-
-        reportParseErrors(tree) catch |err| {
-            std.log.err("failed to dump ast errors: {s}", .{@errorName(err)});
+        const cwd = std.fs.cwd();
+        const xml_src = cwd.readFileAlloc(allocator, xml_file, std.math.maxInt(usize)) catch |err| {
+            std.log.err("Failed to open input file '{s}' with err: {s}", .{ xml_file, @errorName(err) });
             std.process.exit(1);
         };
 
-        if (debug) {
-            break :blk src;
+        var out_buf = std.ArrayList(u8).init(allocator);
+        generate(allocator, xml_file, xml_src, out_buf.writer()) catch |err| {
+            std.log.err("XML parse err: {s}", .{@errorName(err)});
+        };
+        out_buf.append(0) catch @panic("oom");
+        const src = out_buf.items[0 .. out_buf.items.len - 1 :0];
+        const tree = std.zig.Ast.parse(allocator, src, .zig) catch |err| switch (err) {
+            error.OutOfMemory => @panic("oom"),
+        };
+
+        const formatted = if (tree.errors.len > 0) blk: {
+            std.log.err("generated invalid zig code", .{});
+
+            reportParseErrors(tree) catch |err| {
+                std.log.err("failed to dump ast errors: {s}", .{@errorName(err)});
+                std.process.exit(1);
+            };
+
+            if (debug) {
+                break :blk src;
+            }
+            std.process.exit(1);
+        } else tree.render(allocator) catch |err| switch (err) {
+            error.OutOfMemory => @panic("oom"),
+        };
+
+        if (tree.errors.len > 0 and debug) {
+            try stdout.writeAll(src);
         }
-        std.process.exit(1);
-    } else tree.render(allocator) catch |err| switch (err) {
-        error.OutOfMemory => @panic("oom"),
-    };
 
-    if (tree.errors.len > 0 and debug) {
-        try stdout.writeAll(src);
-    }
+        if (std.fs.path.dirname(out_file)) |dir| {
+            cwd.makePath(dir) catch |err| {
+                std.log.err("failed to create output directory '{s}' ({s})", .{ dir, @errorName(err) });
+                std.process.exit(1);
+            };
+        }
 
-    if (std.fs.path.dirname(out_file)) |dir| {
-        cwd.makePath(dir) catch |err| {
-            std.log.err("failed to create output directory '{s}' ({s})", .{ dir, @errorName(err) });
+        const out_path = if (out_pref_opt) |out_prefix|
+            try std.mem.join(arena.allocator(), "/", &[_][]const u8{ out_prefix, out_file })
+        else
+            out_file;
+
+        cwd.writeFile(.{
+            .sub_path = out_path,
+            .data = formatted,
+        }) catch |err| {
+            std.log.err("failed to write to output file '{s}' ({s})", .{ out_file, @errorName(err) });
             std.process.exit(1);
         };
     }
-
-    cwd.writeFile(.{
-        .sub_path = out_file,
-        .data = formatted,
-    }) catch |err| {
-        std.log.err("failed to write to output file '{s}' ({s})", .{ out_file, @errorName(err) });
-        std.process.exit(1);
-    };
 }
 
 fn help_msg(prog_name: []const u8) !void {
