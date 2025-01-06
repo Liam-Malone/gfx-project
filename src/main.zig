@@ -374,6 +374,20 @@ pub fn main() !void {
 
         state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
 
+        // Triangle vertices
+        const vertices = [_]Vertex{
+            .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } }, // Left
+            .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } }, // Top
+            .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } }, // Right
+        };
+
+        const buf = try state.graphics_context.dev.createBuffer(&.{
+            .size = @sizeOf(@TypeOf(vertices)),
+            .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+            .sharing_mode = .exclusive,
+        }, null);
+        defer state.graphics_context.dev.destroyBuffer(buf, null);
+
         var red_val: f32 = 0.0;
         var blu_val: f32 = 0.0;
         var step: f32 = 0.01;
@@ -464,6 +478,32 @@ pub fn main() !void {
     // program err-free exit path
     return return_val;
 }
+
+const Vertex = struct {
+    const binding_description = vk.VertexInputBindingDescription{
+        .binding = 0,
+        .stride = @sizeOf(Vertex),
+        .input_rate = .vertex,
+    };
+
+    const attribute_description = [_]vk.VertexInputAttributeDescription{
+        .{
+            .binding = 0,
+            .location = 0,
+            .format = .r32g32_sfloat,
+            .offset = @offsetOf(Vertex, "pos"),
+        },
+        .{
+            .binding = 0,
+            .location = 1,
+            .format = .r32g32b32_sfloat,
+            .offset = @offsetOf(Vertex, "color"),
+        },
+    };
+
+    pos: [2]f32,
+    color: [3]f32,
+};
 
 const State = struct {
     const Wayland = struct {
