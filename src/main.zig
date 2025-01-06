@@ -382,7 +382,7 @@ pub fn main() !void {
         while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.graphics_context.images.len) {
             const time = std.time.milliTimestamp();
 
-            if (time - prev_time > 32) {
+            if (time - prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
                 red_val += step;
                 blu_val += step;
                 if (red_val >= 1.0 or red_val <= 0.0) {
@@ -451,6 +451,9 @@ pub fn main() !void {
                     }) catch |err| break :exit err;
                     state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
                 }
+            } else {
+                const fps_delay = @divFloor(std.time.ms_per_s, state.fps_target) - (time - prev_time);
+                std.time.sleep(@intCast(fps_delay * std.time.ns_per_ms));
             }
         }
     } catch |err| { // program err exit path
@@ -494,6 +497,7 @@ const State = struct {
     graphics_context: GraphicsContext,
     width: i32,
     height: i32,
+    fps_target: i32 = 60,
     running: bool,
 
     pub fn deinit(state: *State) void {
@@ -594,7 +598,10 @@ fn handle_wl_events(state: *State) void {
             wl_state.socket_closed = true;
             state.running = false;
             break :loop;
-        } orelse Event.nil;
+        } orelse blk: {
+            std.time.sleep(1000_000);
+            break :blk Event.nil;
+        };
         const interface = state.wayland.interface_registry.get(ev.header.id) orelse .nil_ev;
         _ = res: {
             switch (interface) {
