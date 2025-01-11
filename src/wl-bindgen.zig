@@ -154,7 +154,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
             }
             try writer.print(
                 \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params) !void {{
-                \\        try wl_msg.write(writer, @TypeOf(params), params, self.id);
+                \\        try @"wl-msg".write(writer, @TypeOf(params), params, self.id);
                 \\    }}
                 \\
             , .{
@@ -228,7 +228,7 @@ pub fn gen_protocol(writer: anytype, root: *xml.Element) !void {
 
                 // const ev_name = if (std.mem.eql(u8, base_name, "error")) "err" else base_name;
                 try writer.print(
-                    \\                {d} => .{{ .@"{s}" = try wl_msg.parse_data(Event.@"{s}", data) }},
+                    \\                {d} => .{{ .@"{s}" = try @"wl-msg".parse_data(Event.@"{s}", data) }},
                     \\
                 , .{ idx, ev_name, snakeToPascal(ev_name) });
             }
@@ -339,7 +339,7 @@ pub fn generate(allocator: Allocator, xml_filename: []const u8, spec_xml: []cons
         \\const std = @import("std");
         \\const log = std.log.scoped(.@"{s}");
         \\
-        \\const wl_msg = @import("wl_msg"); // It's assumed that the user provides this module
+        \\const @"wl-msg" = @import("wl-msg"); // It's assumed that the user provides this module
         \\
     , .{scope_name});
 
@@ -405,6 +405,7 @@ pub fn main() !void {
             break :blk buf;
         };
 
+        file_outs.items[i] = out_file;
         const cwd = std.fs.cwd();
         const xml_src = cwd.readFileAlloc(allocator, xml_file, std.math.maxInt(usize)) catch |err| {
             std.log.err("Failed to open input file '{s}' with err: {s}", .{ xml_file, @errorName(err) });
@@ -461,6 +462,9 @@ pub fn main() !void {
             std.process.exit(1);
         };
     }
+
+    // generate 'protocols.zig'
+    {}
 }
 
 fn help_msg(prog_name: []const u8) !void {
