@@ -7,20 +7,13 @@ const BindingsGenerator = struct {
     binding_gen: *std.Build.Step.Compile,
     @"wl-msg": *std.Build.Module,
 
-    pub fn gen_bindings(self: *const BindingsGenerator, name: []const u8, xml_spec: std.Build.LazyPath) *std.Build.Module {
+    pub fn gen_bindings(self: *const BindingsGenerator, protocols: [][]const u8) !void {
         const binding_gen_run = self.b.addRunArtifact(self.binding_gen);
-        binding_gen_run.addFileArg(xml_spec);
-        binding_gen_run.addArg("--out");
-        const bindings = binding_gen_run.addOutputFileArg(name);
 
-        const bindings_module = self.b.addModule("bindings", .{
-            .root_source_file = bindings,
-            .target = self.target,
-            .optimize = self.optimize,
-        });
+        binding_gen_run.addArg("-p");
+        _ = binding_gen_run.addOutputDirectoryArg("src/generated");
 
-        bindings_module.addImport("wl-msg", self.@"wl-msg");
-        return bindings_module;
+        binding_gen_run.addArgs(protocols);
     }
 };
 
@@ -43,8 +36,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/wl-bindgen.zig"),
         .target = target,
         .optimize = optimize,
-        .use_llvm = use_llvm,
-        .use_lld = use_lld,
+        .use_llvm = false,
+        .use_lld = false,
     });
 
     const bindings_generator: BindingsGenerator = .{
@@ -55,11 +48,11 @@ pub fn build(b: *std.Build) !void {
         .binding_gen = bindgen,
     };
 
-    const protocols = [_]std.Build.LazyPath{
-        b.path("protocols/wayland/wayland.xml"),
-        b.path("protocols/wayland/xdg-shell.xml"),
-        b.path("protocols/wayland/xdg-decoration-unstable-v1.xml"),
-        b.path("protocols/wayland/linux-dmabuf-v1.xml"),
+    var wl_protocols = [_][]const u8{
+        b.pathFromRoot("protocols/wayland/wayland.xml"),
+        b.pathFromRoot("protocols/wayland/xdg-shell.xml"),
+        b.pathFromRoot("protocols/wayland/xdg-decoration-unstable-v1.xml"),
+        b.pathFromRoot("protocols/wayland/linux-dmabuf-v1.xml"),
     };
 
     // END Wayland-Bindings
@@ -76,19 +69,8 @@ pub fn build(b: *std.Build) !void {
     // TODO: Add windows and eventually macos support
     switch (target.result.os.tag) {
         .linux => {
+            try bindings_generator.gen_bindings(&wl_protocols);
             exe.root_module.addImport("wl-msg", wl_msg_module);
-            for (protocols) |protocol| {
-                const prot = protocol.getPath(b);
-                var start_idx: usize = 0;
-                var end_idx: usize = 0;
-                for (prot, 0..) |char, idx| {
-                    if (char == '/') start_idx = idx + 1;
-                    if (char == '.') end_idx = idx;
-                }
-
-                const protocol_mod: *std.Build.Module = bindings_generator.gen_bindings(prot[start_idx..end_idx], protocol);
-                exe.root_module.addImport(prot[start_idx..end_idx], protocol_mod);
-            }
         },
         else => {
             std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
@@ -124,18 +106,8 @@ pub fn build(b: *std.Build) !void {
     // TODO: Add windows and eventually macos support
     switch (target.result.os.tag) {
         .linux => {
-            for (protocols) |protocol| {
-                const prot = protocol.getPath(b);
-                var start_idx: usize = 0;
-                var end_idx: usize = 0;
-                for (prot, 0..) |char, idx| {
-                    if (char == '/') start_idx = idx + 1;
-                    if (char == '.') end_idx = idx;
-                }
-
-                const protocol_mod = bindings_generator.gen_bindings(prot[start_idx..end_idx], protocol);
-                exe.root_module.addImport(prot[start_idx..end_idx], protocol_mod);
-            }
+            try bindings_generator.gen_bindings(&wl_protocols);
+            exe.root_module.addImport("wl-msg", wl_msg_module);
         },
         else => {
             std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
