@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const wl_msg = @import("wl_msg");
+const wl_msg = @import("wl-msg");
 const wl = @import("wayland");
 const dmab = @import("linux-dmabuf-v1");
 const xdg = @import("xdg-shell");
@@ -364,8 +364,6 @@ pub fn main() !void {
             state.gfx_format.wl_format,
         ) catch |err| break :exit err;
 
-        state.wayland.wl_surface.commit(state.wayland.sock_writer, .{}) catch |err| break :exit err;
-
         state.wayland.wl_surface.attach(state.wayland.sock_writer, .{
             .buffer = state.wayland.wl_buffers[0].id,
             .x = 0,
@@ -443,7 +441,8 @@ pub fn main() !void {
                 vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
                 vk_dev.wrapper.endCommandBuffer(cmd_buf.*) catch |err| break :exit err;
 
-                if (state.running) {
+                // if (state.running)
+                {
                     vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
                         .{
                             .command_buffer_count = 1,

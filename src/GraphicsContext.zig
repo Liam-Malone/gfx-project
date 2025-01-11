@@ -1,11 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-
-const wl = @import("wayland");
-const vk = @import("vulkan");
-
-const vk_log = std.log.scoped(.vulkan);
 const Arena = @import("Arena.zig");
+const vk = @import("vulkan");
+const vk_log = std.log.scoped(.vulkan);
 
 const GraphicsContext = @This();
 
