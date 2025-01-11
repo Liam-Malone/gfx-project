@@ -2,7 +2,7 @@
     .name = "Gfx-Project",
     .version = "0.0.0",
     .dependencies = .{
-        .@"vulkan-zig" = .{
+        .vulkan = .{
             .path = "deps/vulkan-zig",
             .lazy = true,
         },

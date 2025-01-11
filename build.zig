@@ -5,7 +5,7 @@ const BindingsGenerator = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     binding_gen: *std.Build.Step.Compile,
-    wl_msg: *std.Build.Module,
+    @"wl-msg": *std.Build.Module,
 
     pub fn gen_bindings(self: *const BindingsGenerator, name: []const u8, xml_spec: std.Build.LazyPath) *std.Build.Module {
         const binding_gen_run = self.b.addRunArtifact(self.binding_gen);
@@ -19,7 +19,7 @@ const BindingsGenerator = struct {
             .optimize = self.optimize,
         });
 
-        bindings_module.addImport("wl_msg", self.wl_msg);
+        bindings_module.addImport("wl-msg", self.@"wl-msg");
         return bindings_module;
     }
 };
@@ -32,15 +32,15 @@ pub fn build(b: *std.Build) !void {
     const use_lld = b.option(bool, "use-lld", "Whether or not to use LLD as the linker") orelse use_llvm;
 
     // BEGIN Wayland-Bindings
-    const wl_msg_module = b.addModule("wl_msg", .{
-        .root_source_file = b.path("src/wl_msg.zig"),
+    const wl_msg_module = b.addModule("wl-msg", .{
+        .root_source_file = b.path("src/wl-msg.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     const bindgen = b.addExecutable(.{
-        .name = "wl-zig-bindgen",
-        .root_source_file = b.path("src/wl-zig-bindgen.zig"),
+        .name = "wl-bindgen",
+        .root_source_file = b.path("src/wl-bindgen.zig"),
         .target = target,
         .optimize = optimize,
         .use_llvm = use_llvm,
@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) !void {
         .b = b,
         .target = target,
         .optimize = optimize,
-        .wl_msg = wl_msg_module,
+        .@"wl-msg" = wl_msg_module,
         .binding_gen = bindgen,
     };
 
@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) !void {
     // TODO: Add windows and eventually macos support
     switch (target.result.os.tag) {
         .linux => {
-            exe.root_module.addImport("wl_msg", wl_msg_module);
+            exe.root_module.addImport("wl-msg", wl_msg_module);
             for (protocols) |protocol| {
                 const prot = protocol.getPath(b);
                 var start_idx: usize = 0;
@@ -96,7 +96,7 @@ pub fn build(b: *std.Build) !void {
         },
     }
 
-    if (b.lazyDependency("vulkan-zig", .{
+    if (b.lazyDependency("vulkan", .{
         .target = target,
         .optimize = optimize,
         .registry = @as([]const u8, b.pathFromRoot("protocols/vulkan/vk.xml")),
