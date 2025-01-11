@@ -17,7 +17,7 @@ if ! [ -v ZIG ]; then # this is to alias compiler to v0.14.0-dev...
 fi
 
 # half baked
-wl_protocols=(linux_dmabuf wayland xdg_decorations xdg_shell)
+wl_protocols=(linux_dmabuf wayland xdg-decorations xdg-shell)
 root_dir=$PWD
 bin_dir="$root_dir/build/bin"
 tools_dir="$root_dir/build/tools"
@@ -52,19 +52,19 @@ frag_compile="$shader_cmd/frag.spv $root_dir/shaders/simp.frag"
 compile="$ZIG build-exe $build_flags \
 --dep wl_msg \
 --dep wayland \
---dep xdg_shell \
---dep xdg_decoration \
---dep dmabuf \
+--dep xdg-shell \
+--dep xdg-decoration-unstable-v1 \
+--dep linux-dmabuf-v1 \
 --dep vulkan \
 -Mroot=$root_dir/src/main.zig $build_flags \
 -Mwl_msg=$root_dir/src/wl_msg.zig $build_flags --dep wl_msg \
 -Mwayland=$root_dir/src/generated/wayland.zig $build_flags --dep wl_msg \
--Mxdg_shell=$root_dir/src/generated/xdg_shell.zig $build_flags --dep wl_msg \
--Mxdg_decoration=$root_dir/src/generated/xdg_decorations.zig $build_flags --dep wl_msg \
--Mdmabuf=$root_dir/src/generated/linux_dmabuf.zig \
+-Mxdg-shell=$root_dir/src/generated/xdg-shell.zig $build_flags --dep wl_msg \
+-Mxdg-decoration-unstable-v1=$root_dir/src/generated/xdg-decoration-unstable-v1.zig $build_flags --dep wl_msg \
+-Mlinux-dmabuf-v1=$root_dir/src/generated/linux-dmabuf-v1.zig \
 -Mvulkan=$root_dir/src/generated/vk.zig \
--lc \
 -lvulkan \
+-lc \
 --cache-dir $root_dir/.zig-cache \
 --global-cache-dir $HOME/.cache/zig \
 --name $EXE_NAME \
