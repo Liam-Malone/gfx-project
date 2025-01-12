@@ -73,7 +73,7 @@ pub fn parse_data(comptime T: type, data: []const u8) !T {
     var event_result: T = undefined;
     var data_iter: EventParser = .{ .buf = data };
 
-    // Leaving it null for the user to add onto the struct later
+    // Leaving the file descriptor undefined for the user to add onto the struct later
     // I don't love this solution, but if not this, I'd require the user
     // to provide an interface for interacting with a file descriptor queue
     if (@hasField(T, "fd")) {
