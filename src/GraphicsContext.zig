@@ -5,6 +5,7 @@ const vk = @import("vulkan");
 const vk_log = std.log.scoped(.vulkan);
 
 const GraphicsContext = @This();
+pub const BufferCount = 2;
 
 const required_device_extensions = [_][*:0]const u8{
     vk.extensions.khr_swapchain.name,
