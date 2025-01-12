@@ -1,7 +1,7 @@
 # Gfx Project
 
 I started out writing a Wayland client with just libwayland in [C](https://github.com/Liam-Malone/wayland_gfx) and wanted to [duplicate in Zig](https://github.com/Liam-Malone/zig-wayland_gfx). I got curious and decided I'd like to try invoking calls through the wayland socket directly, no libwayland.
-I found [this guide](https://gaultier.github.io/blog/wayland_xrom_scratch.html) on writing a Wayland GUI client from scratch in C, and decided to try following along in Zig.
+I found [this guide](https://gaultier.github.io/blog/wayland_xrom_scratch.html) on writing a (CPU-rendered) Wayland GUI client from scratch in C, and decided to try following along in Zig.
 
 One I had the client working with a CPU-rendered window, I figured I could take this further, and start doing GPU rendering.
 The next step was creating a basic Vulkan context and rendering a blank screen, taking advantage of the DMABuf protocol.
@@ -17,17 +17,19 @@ In the process of attaining a basic window, I realized it would be much easier i
 
 - [x] Basic Window
 - [x] Vulkan Context
-- [ ] Shader Rendering
-- [ ] Texture Rendering
 - [ ] Input Event Handling
+- [ ] Hello Triangle
+- [ ] Texture/Image Rendering
 - [ ] 3D Graphics Rendering
 
 
 #### Next Steps
 
-- [x] Wayland File Descriptor Receiving
-- [ ] Vulkan Swapchain
-- [ ] Window Resizing
+- [ ] Re-structure wayland interface
+- [ ] Move wayland-specific client handling to it's own file
+- [ ] Keyboard/Mouse input events
+- [ ] Proper vulkan swapchain creation pipeline
+- [ ] Window resizing
 
 
 ### Potential Future Goals
