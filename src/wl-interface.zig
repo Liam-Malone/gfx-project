@@ -1,7 +1,9 @@
 const std = @import("std");
+const meta = std.meta;
 const protocols = @import("generated/protocols.zig");
 
 const wl = protocols.wayland;
+const log = std.log.scoped(.@"wl-interface");
 
 pub const Registry = struct {
     const IndexFreeQueue = struct {
@@ -29,23 +31,55 @@ pub const Registry = struct {
         }
     };
 
-    const InterfaceMap = std.AutoHashMap(u32, type);
+    const InterfaceEnum = blk: {
+        const enum_len = len_blk: {
+            var decl_count: usize = 0;
+            for (std.meta.declarations(protocols)) |protocol_decl| {
+                const protocol = @field(protocols, protocol_decl.name);
+                const interfaces = meta.fields(meta.DeclEnum(protocol));
+                decl_count += interfaces.len;
+            }
+            break :len_blk decl_count;
+        };
+
+        var idx: u32 = 0;
+        var fields: [enum_len]std.builtin.Type.EnumField = undefined;
+
+        for (std.meta.declarations(protocols)) |protocol_decl| {
+            const protocol = @field(protocols, protocol_decl.name);
+            for (@typeInfo(meta.DeclEnum(protocol)).@"enum".fields) |interface_decl| {
+                const interface = @field(protocol, interface_decl.name);
+                fields[idx] = .{ .name = interface.name ++ "", .value = idx };
+                idx += 1;
+            }
+        }
+
+        break :blk @Type(.{
+            .@"enum" = .{
+                .tag_type = std.math.IntFittingRange(0, enum_len),
+                .fields = &fields,
+                .decls = &.{},
+                .is_exhaustive = true,
+            },
+        });
+    };
+
+    const InterfaceMap = std.AutoHashMap(u32, InterfaceEnum);
 
     cur_idx: u32,
     elems: InterfaceMap,
     registry: wl.Registry,
     free_list: IndexFreeQueue = .{},
 
-    pub fn init(arena: std.mem.Allocator, writer: anytype, display: wl.Display) Registry {
+    pub fn init(arena: std.mem.Allocator, display: wl.Display) !Registry {
         var map: InterfaceMap = .init(arena);
-        try map.put(1, wl.Display);
-        try map.put(2, wl.Registry);
 
-        const wl_registry = display.get_registry(writer, .{});
+        try map.put(1, meta.stringToEnum(InterfaceEnum, @TypeOf(display).name).?);
+
         return .{
-            .idx = 3,
+            .cur_idx = 2,
             .elems = map,
-            .registry = wl_registry,
+            .registry = .{ .id = 2 },
         };
     }
 
@@ -53,8 +87,8 @@ pub const Registry = struct {
         const idx = if (self.free_list.next()) |freed_id|
             freed_id
         else blk: {
-            defer self.idx += 1;
-            break :blk self.idx;
+            defer self.cur_idx += 1;
+            break :blk self.cur_idx;
         };
 
         try self.registry.bind(writer, .{
@@ -64,29 +98,35 @@ pub const Registry = struct {
             .id = idx,
         });
 
-        try self.elems.put(idx, try .from_type(T));
+        log.debug("Interface \"{s}\" bound with id :: {d}", .{ T.name, idx });
+        try self.elems.put(idx, meta.stringToEnum(InterfaceEnum, T.name).?);
         return .{
             .id = idx,
         };
     }
 
     pub fn insert(self: *Registry, id: u32, comptime T: type) !void {
-        self.idx = id + 1;
-        self.elems.put(id, T);
+        self.cur_idx = id + 1;
+        try self.elems.put(id, meta.stringToEnum(InterfaceEnum, T.name).?);
     }
 
     pub fn register(self: *Registry, comptime T: type) !T {
         const idx = if (self.free_list.next()) |freed_id|
             freed_id
         else blk: {
-            defer self.idx += 1;
-            break :blk self.idx;
+            defer self.cur_idx += 1;
+            break :blk self.cur_idx;
         };
 
-        try self.elems.put(idx, T);
+        try self.elems.put(idx, meta.stringToEnum(InterfaceEnum, T.name).?);
+        log.info("Registering object \"{s}\" with id :: {d}", .{ T.name, idx });
         return .{
             .id = idx,
         };
+    }
+
+    pub fn get(self: *Registry, idx: u32) ?InterfaceEnum {
+        return self.elems.get(idx);
     }
 
     pub fn remove(self: *Registry, obj: anytype) void {

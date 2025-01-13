@@ -13,7 +13,7 @@ const xdg = protocols.xdg_shell;
 const dmab = protocols.linux_dmabuf_v1;
 const xdgd = protocols.xdg_decoration_unstable_v1;
 
-const msg = @import("wl-msg");
+const msg = @import("wl-msg.zig");
 
 const log = std.log.scoped(.@"wayland-client");
 
@@ -25,10 +25,15 @@ pub const nil: Client = .{
     .display = undefined,
     .registry = undefined,
     .compositor = undefined,
-    .interface = undefined,
+    .seat = undefined,
+    .wm_base = undefined,
+    .decorations = undefined,
+    .dmabuf = undefined,
 
     .surfaces = undefined,
-    .ev_iter = undefined,
+    .gfx_format = undefined,
+
+    .ev_thread = undefined,
 };
 
 // Base wayland connection
@@ -50,21 +55,25 @@ focused_surface: usize = 0,
 gfx_format: Drm.Format,
 
 // Wayland event handling
-ev_iter: Event.iter(2048),
 ev_thread: std.Thread,
 
-pub fn init(arena: *Arena) Client {
-    const connection = open_connection: {
-        const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return .nil;
-        const wayland_display = std.posix.getenv("WAYLAND_DISPLAY") orelse return .nil;
+pub var ev_iter: Event.iter(2048) = undefined;
 
-        const sock_path = std.mem.join(arena.allocator(), "/", &[_][]const u8{ xdg_runtime_dir, wayland_display }) catch return .nil;
-        break :open_connection std.net.connectUnixSocket(sock_path) catch return .nil;
+pub fn init(arena: *Arena) *Client {
+    const alloc = arena.allocator();
+    const connection = open_connection: {
+        const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return @constCast(&Client.nil);
+        const wayland_display = std.posix.getenv("WAYLAND_DISPLAY") orelse return @constCast(&Client.nil);
+
+        const sock_path = std.mem.join(alloc, "/", &[_][]const u8{ xdg_runtime_dir, wayland_display }) catch return @constCast(&Client.nil);
+        break :open_connection std.net.connectUnixSocket(sock_path) catch return @constCast(&Client.nil);
     };
 
     const display: wl.Display = .{ .id = 1 };
     const connection_writer = connection.writer();
-    interface.registry = .init(arena.allocator(), connection_writer, display); // calls 'get_resitry'
+
+    interface.registry = interface.Registry.init(alloc, display) catch return @constCast(&Client.nil);
+    _ = display.get_registry(connection_writer, .{}) catch return @constCast(&Client.nil);
 
     var compositor_opt: ?wl.Compositor = null;
     var seat_opt: ?wl.Seat = null;
@@ -72,16 +81,15 @@ pub fn init(arena: *Arena) Client {
     var decorations_opt: ?xdgd.DecorationManagerV1 = null;
     var dmabuf_opt: ?dmab.LinuxDmabufV1 = null;
 
-    var ev_iter: Event.iter(2048) = .init(connection);
+    ev_iter = .init(connection);
     ev_iter.load_events() catch |err| {
         log.err("Failed to load wayland events with err :: {s}", .{@errorName(err)});
-        return .nil;
+        return @constCast(&Client.nil);
     };
     // Bind interfaces
-    while (ev_iter.next() catch return .nil) |ev| {
-        const interface_opt = interface.registry.get(ev.header.id) orelse null;
-        if (interface_opt) |registry_interface| {
-            if (@TypeOf(registry_interface) != wl.Registry) {
+    while (ev_iter.next() catch return @constCast(&Client.nil)) |ev| {
+        if (interface.registry.get(ev.header.id)) |registry_interface| {
+            if (registry_interface != .wl_registry) {
                 continue;
             }
             const action_opt = wl.Registry.Event.parse(ev.header.op, ev.data) catch null;
@@ -123,27 +131,27 @@ pub fn init(arena: *Arena) Client {
 
     const wl_compositor = compositor_opt orelse {
         log.err("Failed to bind wl_compositor, cannot continue", .{});
-        return .nil;
+        return @constCast(&Client.nil);
     };
     const wl_seat = seat_opt orelse {
         log.err("Failed to bind wl_compositor, cannot continue", .{});
-        return .nil;
+        return @constCast(&Client.nil);
     };
     const xdg_wm_base = wm_base_opt orelse {
         log.err("Failed to bind wl_compositor, cannot continue", .{});
-        return .nil;
+        return @constCast(&Client.nil);
     };
     const xdg_decorations = decorations_opt orelse {
         log.err("Failed to bind wl_compositor, cannot continue", .{});
-        return .nil;
+        return @constCast(&Client.nil);
     };
     const linux_dmabuf = dmabuf_opt orelse {
         log.err("Failed to bind wl_compositor, cannot continue", .{});
-        return .nil;
+        return @constCast(&Client.nil);
     };
 
-    var surfaces: std.ArrayList(*Surface) = .init(arena.allocator());
-    var client: Client = .{
+    const client_ptr = arena.create(Client);
+    client_ptr.* = .{
         .socket = connection.handle,
         .connection = connection,
         .display = display,
@@ -156,7 +164,7 @@ pub fn init(arena: *Arena) Client {
 
         .surfaces = undefined,
         .focused_surface = 0,
-        .ev_iter = ev_iter,
+        .gfx_format = .abgr8888,
         .ev_thread = undefined,
     };
 
@@ -164,26 +172,27 @@ pub fn init(arena: *Arena) Client {
     initial_surface.* = .init(.{
         .app_id = "simple-client",
         .surface_title = "Simple Client",
-        .client = &client,
+        .client = client_ptr,
         .compositor = wl_compositor,
         .wm_base = xdg_wm_base,
         .decoration_manager = xdg_decorations,
         .dims = .{ .x = 800, .y = 600 },
     });
 
+    var surfaces: std.ArrayList(*Surface) = .init(arena.allocator());
     surfaces.append(initial_surface) catch {
         log.err("Failed to add initial surface to surfaces list", .{});
     };
+    client_ptr.surfaces = surfaces;
 
-    const ev_thread = std.Thread.spawn(.{}, ev_handle_thread, .{&client}) catch |err| {
+    const ev_thread = std.Thread.spawn(.{}, ev_handle_thread, .{client_ptr}) catch |err| {
         log.err("Wayland Event Thread Spawn Failed :: {s}", .{@errorName(err)});
-        return .nil;
+        return @constCast(&Client.nil);
     };
-    client.surfaces = surfaces;
-    client.ev_thread = ev_thread;
 
-    while (!client.surfaces.items[client.focused_surface].flags.acked) {} // wait for ev thread to ack config
-    return client;
+    client_ptr.ev_thread = ev_thread;
+
+    return client_ptr;
 }
 
 pub fn deinit(client: *Client) void {
@@ -200,64 +209,94 @@ fn ev_handle_thread(client: *Client) void {
 }
 
 fn handle_event(client: *Client) !void {
-    const event_iterator = &client.ev_iter;
+    const event_iterator = &ev_iter;
 
     const writer = client.connection.writer();
-    const ev_opt = event_iterator.next() catch |err| {
-        log.err("Wayland Event Thread Encountered Fatal Error: {s}", .{@errorName(err)});
-        return err;
-    } orelse blk: {
-        std.time.sleep(8 * std.time.ns_per_ms);
+    const ev_opt = try event_iterator.next() orelse blk: {
+        std.time.sleep(1_000_000);
         break :blk null;
     };
     if (ev_opt) |ev| {
         const ev_interface = interface.registry.get(ev.header.id) orelse return;
         switch (ev_interface) {
-            xdg.WmBase => {
+            .wl_display => {
+                const action_opt: ?wl.Display.Event = wl.Display.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .delete_id => {
+                            log.warn("WARNING :: Display ID Deletion Not Yet Implemented", .{});
+                        },
+                        .@"error" => |err| {
+                            log.err("wl_display::error => object id: {d}, code: {d}, msg: {s}", .{
+                                err.object_id,
+                                err.code,
+                                err.message,
+                            });
+                        },
+                    };
+            },
+            .wl_surface => {
+                const action_opt: ?wl.Surface.Event = wl.Surface.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .enter => log.info("wl_surface :: gained focus", .{}),
+                        .leave => log.info("wl_surface :: lost focus", .{}),
+                        .preferred_buffer_scale => log.info("wl_surface :: received preferred buffer scale", .{}),
+                        .preferred_buffer_transform => log.info("wl_surface :: received preferred buffer transform", .{}),
+                    };
+            },
+            .xdg_wm_base => {
                 const action_opt: ?xdg.WmBase.Event = xdg.WmBase.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
                         .ping => |ping| {
-                            client.xdg_wm_base.pong(writer, .{
+                            client.wm_base.pong(writer, .{
                                 .serial = ping.serial,
                             }) catch |err| return err;
+                            log.info("ponged ping from xdg_wm_base :: serial = {d}", .{ping.serial});
                         },
                     };
             },
-            xdg.Surface => {
+            .xdg_surface => {
                 const action_opt: ?xdg.Surface.Event = xdg.Surface.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
                         .configure => |configure| {
-                            client.surfaces.items[client.focused_surface].ack_configure(writer, .{ .serial = configure.serial }) catch |err| return err;
-                            if (!client.surfaces.items[client.focused_surface].flags.acked) {
+                            const focused_surface = client.surfaces.items[client.focused_surface];
+                            focused_surface.xdg_surface.ack_configure(writer, .{
+                                .serial = configure.serial,
+                            }) catch |err| return err;
+                            if (!focused_surface.flags.acked) {
                                 log.info("Acked configure for xdg_surface", .{});
-                                client.surfaces.items[client.focused_surface].flags.acked = true;
+                                focused_surface.flags.acked = true;
                             }
                         },
                     };
             },
-            xdg.Toplevel => {
+            .xdg_toplevel => {
                 const action_opt: ?xdg.Toplevel.Event = xdg.Toplevel.Event.parse(ev.header.op, ev.data) catch null;
+                const focused_surface = client.surfaces.items[client.focused_surface];
                 if (action_opt) |action|
                     switch (action) {
                         .configure => |configure| {
-                            if (configure.width > client.surfaces.items[client.focused_surface].dims.x or configure.height > client.surfaces.items[client.focused_surface].dims.y) {
+                            if (configure.width > focused_surface.dims.x or configure.height > focused_surface.dims.y) {
                                 log.info("Resizing Window :: {d}x{d} -> {d}x{d}", .{
-                                    client.surfaces.items[client.focused_surface].dims.x,
-                                    client.surfaces.items[client.focused_surface].dims.y,
+                                    focused_surface.dims.x,
+                                    focused_surface.dims.y,
                                     configure.width,
                                     configure.height,
                                 });
 
-                                client.surfaces.items[client.focused_surface].dims.x = configure.width;
-                                client.surfaces.items[client.focused_surface].dims.y = configure.height;
+                                focused_surface.dims.x = configure.width;
+                                focused_surface.dims.y = configure.height;
                             }
                         },
                         .close => { //  Empty struct, nothing to capture
                             log.info("Toplevel Received Close Signal", .{});
-                            client.surfaces.items[client.focused_surface].destroy(writer, .{}) catch |err| return err;
-                            client.surfaces.orderedRemove(client.focused_surface);
+                            focused_surface.toplevel.destroy(writer, .{}) catch |err| return err;
+                            focused_surface.xdg_surface.destroy(writer, .{}) catch |err| return err;
+                            focused_surface.wl_surface.destroy(writer, .{}) catch |err| return err;
+                            _ = client.surfaces.orderedRemove(client.focused_surface);
                             if (client.surfaces.items.len == 0) {
                                 client.socket = -1;
                             }
@@ -265,7 +304,7 @@ fn handle_event(client: *Client) !void {
                         else => {},
                     };
             },
-            dmab.LinuxDmabufFeedbackV1 => {
+            .zwp_linux_dmabuf_feedback_v1 => {
                 const feedback = dmab.LinuxDmabufFeedbackV1.Event.parse(ev.header.op, ev.data) catch |err| return err;
 
                 switch (feedback) {
@@ -284,13 +323,19 @@ fn handle_event(client: *Client) !void {
                             };
                             defer std.posix.munmap(table_data);
 
-                            client.gfx_format.wl_format = .abgr8888;
+                            client.gfx_format = .abgr8888;
                         }
                     },
                     else => {},
                 }
             },
-            else => {},
+            else => {
+                log.warn("Unused event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
+                    ev.header.id,
+                    ev.header.op,
+                    ev.header.msg_size,
+                });
+            },
         }
     }
 }
@@ -334,7 +379,7 @@ const Event = struct {
                 /// Any incomplete data is moved to the front, and all other bytes are zeroed out
                 pub fn shift(sb: *ShiftBuf) void {
                     std.mem.copyForwards(u8, &sb.data, sb.data[sb.start..]);
-                    @memset(sb.data[sb.start + 1 ..], 0); // Just in case
+                    // @memset(sb.data[sb.start % buf_size ..], 0); // Just in case
                     sb.end -= sb.start;
                     sb.start = 0;
                 }
@@ -372,6 +417,7 @@ const Event = struct {
 
                 const bytes_read: usize = try it.stream.read(it.buf.data[it.buf.end..]);
                 it.buf.end += bytes_read;
+                it.buf.end = if (it.buf.end > buf_size) buf_size else it.buf.end;
             }
 
             /// Get next stored message from buffer
@@ -393,14 +439,15 @@ const Event = struct {
                         const data_end = it.buf.start + header.msg_size;
 
                         if (data_end > it.buf.end) {
-                            std.log.err("data too big: {d} ... end: {d}", .{ data_end, it.buf.end });
+                            log.err("data too big: {d} ... end: {d}", .{ data_end, it.buf.end });
                             if (it.buf.start == 0) {
                                 return error.BufTooSmol;
                             }
 
                             break :blk null;
                         }
-                        defer it.buf.start = data_end;
+
+                        it.buf.start = data_end;
 
                         break :blk .{
                             .header = header,
@@ -452,9 +499,10 @@ const Event = struct {
 };
 
 const cmsg = msg.cmsg;
+const fd_cmsg = cmsg(std.posix.fd_t);
 const SCM_RIGHTS = 0x01;
 fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?std.posix.fd_t {
-    var cmsg_buf: [cmsg(std.posix.fd_t).Size * 12]u8 = undefined;
+    var cmsg_buf: [fd_cmsg.Size * 12]u8 = undefined;
 
     var iov = [_]std.posix.iovec{
         .{
@@ -473,7 +521,7 @@ fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?std.posix.fd_t {
         .flags = 0,
     };
 
-    const rc: usize = std.os.linux.recvmsg(socket, &message, std.os.linux.MSG.PEEK | std.os.linux.MSG.DONTWAIT);
+    const rc = std.os.linux.recvmsg(socket, &message, std.os.linux.MSG.PEEK | std.os.linux.MSG.DONTWAIT);
 
     const res = res: {
         if (@as(isize, @bitCast(rc)) < 0) {
@@ -481,12 +529,11 @@ fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?std.posix.fd_t {
             log.err("recvmsg failed with err: {s}", .{@tagName(err)});
             break :res null;
         } else {
-            const cmsg_t = cmsg(std.posix.fd_t);
-            const cmsg_size = cmsg_t.Size - cmsg_t.Padding;
+            const cmsg_size = fd_cmsg.Size;
             var offset: usize = 0;
             while (offset + cmsg_size <= message.controllen) {
                 const ctrl_buf: [*]u8 = @ptrCast(message.control.?);
-                const ctrl_msg: *align(1) cmsg(std.posix.fd_t) = @ptrCast(@alignCast(ctrl_buf[offset..][0..64]));
+                const ctrl_msg: *align(1) fd_cmsg = @ptrCast(@alignCast(ctrl_buf[offset..][0..fd_cmsg.Size]));
 
                 if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == SCM_RIGHTS)
                     break :res ctrl_msg.data;
@@ -514,7 +561,7 @@ pub const Surface = struct {
     };
 
     flags: Flags = .{},
-    Client: *Client,
+    client: *const Client,
     id: []const u8,
     title: []const u8,
     wl_surface: wl.Surface,
@@ -528,6 +575,9 @@ pub const Surface = struct {
     fps_target: i32 = 60,
 
     pub const nil: Surface = .{
+        .id = "",
+        .title = "",
+        .client = &Client.nil,
         .wl_surface = .{ .id = 0 },
         .xdg_surface = .{ .id = 0 },
         .toplevel = .{ .id = 0 },
@@ -541,8 +591,8 @@ pub const Surface = struct {
 
     const init_params = struct {
         client: *Client,
-        app_id: ?[]const u8 = null,
-        surface_title: ?[]const u8 = null,
+        app_id: ?[:0]const u8 = null,
+        surface_title: ?[:0]const u8 = null,
         compositor: wl.Compositor,
         wm_base: xdg.WmBase,
         decoration_manager: xdgd.DecorationManagerV1,
@@ -611,6 +661,7 @@ pub const Surface = struct {
             .title = params.surface_title orelse "",
             .wl_surface = wl_surface,
             .xdg_surface = xdg_surface,
+            .toplevel = xdg_toplevel,
             .decorations = decorations,
             .buffers = params.buffers orelse undefined,
             .cur_buf = 0,
@@ -630,7 +681,7 @@ pub const Surface = struct {
         }
 
         surface.wl_surface.attach(surface.client.connection.writer(), .{
-            .buffer = surface.buffers[0],
+            .buffer = surface.buffers[0].id,
             .x = 0,
             .y = 0,
         }) catch return error.FailedToAttachBuffer;
@@ -645,7 +696,7 @@ pub const Surface = struct {
     ) wl.Buffer {
         const writer = surface.client.connection.writer();
 
-        const dmabuf_params_opt = surface.client.dmabuf.create_params(surface.writer, .{}) catch |err| nil: {
+        const dmabuf_params_opt = surface.client.dmabuf.create_params(writer, .{}) catch |err| nil: {
             log.err("Failed to create linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
             break :nil null;
         };
@@ -664,7 +715,7 @@ pub const Surface = struct {
                 .modifier_lo = Drm.Modifier.linear.lo(),
             }) catch |err| {
                 log.err("Failed to add data to linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
-                break :buffer .{ .id = 0 };
+                break :buffer null;
             };
 
             const wl_buffer = dmabuf_params.create_immed(writer, .{
@@ -674,14 +725,15 @@ pub const Surface = struct {
                 .flags = .{},
             }) catch |err| {
                 log.err("Failed to create wl_buffer due to err :: {s}", .{@errorName(err)});
-                break :buffer .{ .id = 0 };
+                break :buffer null;
             };
 
             break :buffer wl_buffer;
         } else buffer: {
-            break :buffer .{ .id = 0 };
+            break :buffer null;
         };
-        return wl_buffer;
+
+        if (wl_buffer) |buffer| return buffer else return .{ .id = 0 };
     }
 };
 

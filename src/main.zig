@@ -1,23 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
-
-const wl_msg = @import("wl-msg");
-const wl = @import("wayland");
-const dmab = @import("linux-dmabuf-v1");
-const xdg = @import("xdg-shell");
-const xdgd = @import("xdg-decoration-unstable-v1");
-
-const wl_log = std.log.scoped(.wayland);
-const Header = wl_msg.Header;
-
 const vk = @import("vulkan");
-
 const Drm = @import("Drm.zig");
 
-const Arena = @import("Arena.zig");
 const GraphicsContext = @import("GraphicsContext.zig");
+const Arena = @import("Arena.zig");
 
-const app_log = std.log.scoped(.app);
+const WlClient = @import("wl-client.zig");
+const protocols = @import("generated/protocols.zig");
+const dmab = protocols.linux_dmabuf_v1;
+
+const log = std.log.scoped(.app);
 
 // TODO: Remove all `try` usage from main()
 pub fn main() !void {
@@ -27,7 +20,7 @@ pub fn main() !void {
 
         // Creating application state
         var state: State = state: {
-            const client: WlClient = .init(arena);
+            const client: *WlClient = .init(arena);
             break :state .{
                 .client = client,
                 .vk_format = undefined,
@@ -36,26 +29,25 @@ pub fn main() !void {
         };
         defer state.deinit();
 
-        const feedback = state.wayland.interface_registry.register(dmab.LinuxDmabufFeedbackV1) catch |err| break :exit err;
+        var focused_surface: *WlClient.Surface = state.client.surfaces.items[state.client.focused_surface];
 
-        state.wayland.dmabuf.get_surface_feedback(state.wayland.sock_writer, .{
-            .id = feedback.id,
-            .surface = state.wayland.wl_surface.id,
+        while (!focused_surface.flags.acked) {}
+        _ = state.client.dmabuf.get_surface_feedback(state.client.connection.writer(), .{
+            .surface = focused_surface.wl_surface.id,
         }) catch |err| break :exit err;
 
-        app_log.debug("Initializing Vulkan State", .{});
         state.graphics_context = vk_state: {
             // Shader loading
             var vert_buf: []u8 = arena.push(u8, 1072);
             const vert_file = std.fs.cwd().openFile("build/shaders/vert.spv", .{ .mode = .read_only }) catch |err| {
-                app_log.err("File Open Err :: {s}", .{@errorName(err)});
+                log.err("File Open Err :: {s}", .{@errorName(err)});
                 state.deinit();
                 break :exit err;
             };
             defer vert_file.close();
 
             const vert_bytes = vert_file.readAll(vert_buf) catch |err| {
-                app_log.err("File Read Err :: {s}", .{@errorName(err)});
+                log.err("File Read Err :: {s}", .{@errorName(err)});
                 state.deinit();
                 break :exit err;
             };
@@ -64,25 +56,24 @@ pub fn main() !void {
 
             var frag_buf: []u8 = arena.push(u8, 564);
             const frag_file = std.fs.cwd().openFile("build/shaders/frag.spv", .{ .mode = .read_only }) catch |err| {
-                app_log.err("File Open Err :: {s}", .{@errorName(err)});
+                log.err("File Open Err :: {s}", .{@errorName(err)});
                 state.deinit();
                 break :exit err;
             };
             defer frag_file.close();
 
             const frag_bytes = frag_file.readAll(frag_buf) catch |err| {
-                app_log.err("File Read Err :: {s}", .{@errorName(err)});
+                log.err("File Read Err :: {s}", .{@errorName(err)});
                 state.deinit();
                 break :exit err;
             };
 
             const frag_spv: [*]const u32 = @ptrCast(@alignCast(frag_buf[0..frag_bytes]));
 
-            const screen_width: u32 = @intCast(state.width);
-            const screen_height: u32 = @intCast(state.height);
+            const screen_width: u32 = @intCast(focused_surface.dims.x);
+            const screen_height: u32 = @intCast(focused_surface.dims.x);
 
             // Create Vulkan Graphics Context
-            app_log.debug("Creating Graphics Context", .{});
             var graphics_context = graphics_context: {
                 break :graphics_context GraphicsContext.init(
                     arena,
@@ -96,7 +87,7 @@ pub fn main() !void {
                     false,
                 );
             } catch |err| {
-                app_log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
+                log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
                 break :exit error.VulkanInitializationFailed;
             };
 
@@ -115,10 +106,10 @@ pub fn main() !void {
             defer vk_dev.destroyShaderModule(frag, null);
 
             const pipeline_create_res = graphics_context.create_pipelines(&[_]vk.ShaderModule{ vert, frag }, &[_][*:0]const u8{ "main", "main" }) catch |err| break :exit err;
-            app_log.debug("Pipeline Creation Returned Code: {s}", .{@tagName(pipeline_create_res)});
+            _ = pipeline_create_res;
 
             graphics_context.create_framebuffers() catch |err| {
-                app_log.err("Failed to Create Initial Vulkan Framebuffers :: {s}", .{@errorName(err)});
+                log.err("Failed to Create Initial Vulkan Framebuffers :: {s}", .{@errorName(err)});
                 break :exit err;
             };
 
@@ -154,7 +145,6 @@ pub fn main() !void {
                 vk_dev.wrapper.endCommandBuffer(cmd_buf) catch |err| break :exit err;
             }
 
-            app_log.debug("Initial Queue Submission", .{});
             vk_dev.wrapper.queueSubmit(graphics_context.graphics_queue.handle, 1, &[_]vk.SubmitInfo{
                 .{
                     .command_buffer_count = 1,
@@ -162,33 +152,37 @@ pub fn main() !void {
                 },
             }, .null_handle) catch |err| break :exit err;
 
-            app_log.info("Initial Render Dimensions: {d}x{d}", .{ state.width, state.height });
+            log.info("Initial Render Dimensions: {d}x{d}", .{ focused_surface.dims.x, focused_surface.dims.y });
             // Return constructed state
             break :vk_state graphics_context;
         };
-        var focused_surface: *WlClient.Surface = state.client.surfaces.items[state.client.focused_surface];
+        log.info("Vulkan Initialized", .{});
+
         try focused_surface.init_buffers(state.graphics_context.mem_fds);
 
-        // Triangle vertices
-        const vertices = [_]Vertex{
-            .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } }, // Left
-            .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } }, // Top
-            .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } }, // Right
-        };
+        // Actual vulkan learning
+        {
+            // Triangle vertices
+            const vertices = [_]Vertex{
+                .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } }, // Left
+                .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } }, // Top
+                .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } }, // Right
+            };
 
-        const buf = try state.graphics_context.dev.createBuffer(&.{
-            .size = @sizeOf(@TypeOf(vertices)),
-            .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
-            .sharing_mode = .exclusive,
-        }, null);
-        defer state.graphics_context.dev.destroyBuffer(buf, null);
+            const buf = try state.graphics_context.dev.createBuffer(&.{
+                .size = @sizeOf(@TypeOf(vertices)),
+                .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+                .sharing_mode = .exclusive,
+            }, null);
+            defer state.graphics_context.dev.destroyBuffer(buf, null);
+        }
 
         var red_val: f32 = 0.0;
         var blu_val: f32 = 0.0;
         var step: f32 = 0.01;
         var cur_frame_idx: usize = 0;
         var prev_time: i64 = std.time.milliTimestamp();
-        while (state.running) : (cur_frame_idx = (cur_frame_idx + 1) % state.graphics_context.images.len) {
+        while (state.client.socket != -1) : (cur_frame_idx = (cur_frame_idx + 1) % state.graphics_context.images.len) {
             const time = std.time.milliTimestamp();
 
             if (time - prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
@@ -227,8 +221,8 @@ pub fn main() !void {
                             .y = 0,
                         },
                         .extent = .{
-                            .width = @intCast(state.width),
-                            .height = @intCast(state.height),
+                            .width = @intCast(focused_surface.dims.x),
+                            .height = @intCast(focused_surface.dims.y),
                         },
                     },
                     .clear_value_count = 1,
@@ -238,7 +232,6 @@ pub fn main() !void {
                 vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
                 vk_dev.wrapper.endCommandBuffer(cmd_buf.*) catch |err| break :exit err;
 
-                // if (state.running)
                 {
                     vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
                         .{
@@ -247,19 +240,19 @@ pub fn main() !void {
                         },
                     }, .null_handle) catch |err| break :exit err;
 
-                    focused_surface.damage(state.client.connection.writer(), .{
+                    focused_surface.wl_surface.damage(state.client.connection.writer(), .{
                         .x = 0,
                         .y = 0,
-                        .width = focused_surface.width,
-                        .height = focused_surface.height,
+                        .width = focused_surface.dims.x,
+                        .height = focused_surface.dims.y,
                     }) catch |err| break :exit err;
 
-                    focused_surface.attach(state.client.connection.writer(), .{
+                    focused_surface.wl_surface.attach(state.client.connection.writer(), .{
                         .buffer = focused_surface.buffers[0].id,
                         .x = 0,
                         .y = 0,
                     }) catch |err| break :exit err;
-                    focused_surface.commit(state.client.connection.writer(), .{}) catch |err| break :exit err;
+                    focused_surface.wl_surface.commit(state.client.connection.writer(), .{}) catch |err| break :exit err;
                 }
             } else {
                 const fps_delay = @divFloor(std.time.ms_per_s, state.fps_target) - (time - prev_time);
@@ -267,7 +260,7 @@ pub fn main() !void {
             }
         }
     } catch |err| { // program err exit path
-        app_log.err("Program exiting due to error: {s}", .{@errorName(err)});
+        log.err("Program exiting due to error: {s}", .{@errorName(err)});
         std.process.exit(1);
     };
 
@@ -302,7 +295,7 @@ const Vertex = struct {
 };
 
 const State = struct {
-    client: WlClient,
+    client: *WlClient,
     vk_format: vk.Format,
     graphics_context: GraphicsContext,
     fps_target: i32 = 60,

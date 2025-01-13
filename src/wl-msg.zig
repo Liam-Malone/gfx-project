@@ -123,6 +123,7 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
         const field_type: type = switch (@typeInfo(field.type)) {
             .@"enum" => u32,
             .@"struct" => |@"struct"| if (@"struct".layout == .@"packed") u32 else field.type,
+            .optional => |Optional| Optional.child,
             else => field.type,
         };
         switch (field_type) {
@@ -151,7 +152,10 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
             if (std.mem.eql(u8, field.name, "fd")) {
                 fd = @intCast(val);
             } else {
-                const field_as_bytes = std.mem.asBytes(&val);
+                const field_as_bytes = if (@typeInfo(field.type) == .optional)
+                    std.mem.asBytes(&(val.?))
+                else
+                    std.mem.asBytes(&val);
                 @memcpy(msg[idx .. idx + field_as_bytes.len], field_as_bytes);
                 idx += field_as_bytes.len;
             }
@@ -165,6 +169,7 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
         const field_type: type = switch (@typeInfo(field.type)) {
             .@"enum" => u32,
             .@"struct" => |@"struct"| if (@"struct".layout == .@"packed") u32 else field.type,
+            .optional => |Optional| Optional.child,
             else => field.type,
         };
 
@@ -172,6 +177,7 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
         const msg_val = switch (@typeInfo(field.type)) {
             .@"enum" => @intFromEnum(field_val),
             .@"struct" => @as(u32, @bitCast(field_val)),
+            .optional => field_val.?,
             else => field_val,
         };
         switch (field_type) {

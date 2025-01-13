@@ -5,7 +5,6 @@ const BindingsGenerator = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     binding_gen: *std.Build.Step.Compile,
-    @"wl-msg": *std.Build.Module,
 
     pub fn gen_bindings(self: *const BindingsGenerator, protocols: [][]const u8) !void {
         const binding_gen_run = self.b.addRunArtifact(self.binding_gen);
@@ -25,12 +24,6 @@ pub fn build(b: *std.Build) !void {
     const use_lld = b.option(bool, "use-lld", "Whether or not to use LLD as the linker") orelse use_llvm;
 
     // BEGIN Wayland-Bindings
-    const wl_msg_module = b.addModule("wl-msg", .{
-        .root_source_file = b.path("src/wl-msg.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const bindgen = b.addExecutable(.{
         .name = "wl-bindgen",
         .root_source_file = b.path("src/wl-bindgen.zig"),
@@ -44,7 +37,6 @@ pub fn build(b: *std.Build) !void {
         .b = b,
         .target = target,
         .optimize = optimize,
-        .@"wl-msg" = wl_msg_module,
         .binding_gen = bindgen,
     };
 
@@ -70,7 +62,6 @@ pub fn build(b: *std.Build) !void {
     switch (target.result.os.tag) {
         .linux => {
             try bindings_generator.gen_bindings(&wl_protocols);
-            exe.root_module.addImport("wl-msg", wl_msg_module);
         },
         else => {
             std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
@@ -107,7 +98,6 @@ pub fn build(b: *std.Build) !void {
     switch (target.result.os.tag) {
         .linux => {
             try bindings_generator.gen_bindings(&wl_protocols);
-            exe.root_module.addImport("wl-msg", wl_msg_module);
         },
         else => {
             std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
