@@ -73,20 +73,17 @@ pub fn main() !void {
             const screen_width: u32 = @intCast(focused_surface.dims.x);
             const screen_height: u32 = @intCast(focused_surface.dims.x);
 
-            // Create Vulkan Graphics Context
-            var graphics_context = graphics_context: {
-                break :graphics_context GraphicsContext.init(
-                    arena,
-                    "Simple Window",
-                    .{
-                        .width = screen_width,
-                        .height = screen_height,
-                        .depth = 1,
-                    },
-                    .r8g8b8a8_unorm,
-                    false,
-                );
-            } catch |err| {
+            var graphics_context = GraphicsContext.init(
+                arena,
+                "Simple Window",
+                .{
+                    .width = screen_width,
+                    .height = screen_height,
+                    .depth = 1,
+                },
+                .r8g8b8a8_unorm,
+                false,
+            ) catch |err| {
                 log.err("Vulkan Graphics Context creation failed with error: {s}", .{@errorName(err)});
                 break :exit error.VulkanInitializationFailed;
             };
@@ -152,7 +149,7 @@ pub fn main() !void {
                 },
             }, .null_handle) catch |err| break :exit err;
 
-            log.info("Initial Render Dimensions: {d}x{d}", .{ focused_surface.dims.x, focused_surface.dims.y });
+            log.info("Initial Render Dimensions: {d}x{d}", .{ screen_width, screen_height });
             // Return constructed state
             break :vk_state graphics_context;
         };
