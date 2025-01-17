@@ -29,7 +29,9 @@ function vk_gen() {
 
 # TODO: pass in pairs of spec + output_filename
 function wl_gen() {
-    exe_name='wl-zig-bindgen'
+    exe_name='wl-zig-generator'
+    protocols=''
+    for arg in "$@"; do protocols="$protocols $arg"; done
 
     mkdir -p tools
     cd tools
@@ -37,7 +39,7 @@ function wl_gen() {
     if [ -v build_wl_bindgen ] || ! [ -f ./$exe_name ]; then
         echo "[Building Wayland Binding Generator]"
         compile_cmd="$ZIG build-exe $build_flags    \
-            -Mroot=$root_dir/src/wl-zig-bindgen.zig \
+            -Mroot=$root_dir/src/wl-bindgen.zig     \
             --cache-dir $root_dir/.zig-cache        \
             --global-cache-dir $HOME/.cache/zig     \
             --name $exe_name                        \
@@ -48,12 +50,9 @@ function wl_gen() {
 
     echo "[Generating Wayland Bindings]"
 
-    ./$exe_name $root_dir/protocols/wayland/wayland.xml $root_dir/src/generated/wayland.zig
-    ./$exe_name $root_dir/protocols/wayland/xdg-shell.xml $root_dir/src/generated/xdg_shell.zig
-    ./$exe_name $root_dir/protocols/wayland/xdg-decoration-unstable-v1.xml $root_dir/src/generated/xdg_decorations.zig
-    ./$exe_name $root_dir/protocols/wayland/linux-dmabuf-v1.xml $root_dir/src/generated/linux_dmabuf.zig
-
     cd ..
+
+    tools/$exe_name $protocols -p $root_dir/src/generated
 }
 
 if [ $0 == "./codegen.sh" ]; then
@@ -64,4 +63,3 @@ if [ $0 == "./codegen.sh" ]; then
     vk_gen
     wl_gen
 fi
-

@@ -17,7 +17,6 @@ if ! [ -v ZIG ]; then # this is to alias compiler to v0.14.0-dev...
 fi
 
 # half baked
-wl_protocols=(linux_dmabuf wayland xdg-decorations xdg-shell)
 root_dir=$PWD
 bin_dir="$root_dir/build/bin"
 tools_dir="$root_dir/build/tools"
@@ -42,7 +41,7 @@ build_flags="$build_flags -O$build_mode"
 cd build
 
 # TODO: loop over desired protocols
-if [ -v regen ]; then source $root_dir/scripts/codegen.sh && vk_gen && wl_gen ; fi; 
+if [ -v regen ]; then source $root_dir/scripts/codegen.sh && vk_gen && wl_gen ../protocols/wayland/*.xml ; fi; 
 if ! [ -f $root_dir/src/generated/vk.zig ]; then vk_gen ; fi
 
 shader_cmd="glslc --target-env=vulkan1.2 -o $root_dir/build/shaders"
@@ -50,18 +49,8 @@ vert_compile="$shader_cmd/vert.spv $root_dir/shaders/simp.vert"
 frag_compile="$shader_cmd/frag.spv $root_dir/shaders/simp.frag"
 
 compile="$ZIG build-exe $build_flags \
---dep wl_msg \
---dep wayland \
---dep xdg-shell \
---dep xdg-decoration-unstable-v1 \
---dep linux-dmabuf-v1 \
 --dep vulkan \
 -Mroot=$root_dir/src/main.zig $build_flags \
--Mwl_msg=$root_dir/src/wl_msg.zig $build_flags --dep wl_msg \
--Mwayland=$root_dir/src/generated/wayland.zig $build_flags --dep wl_msg \
--Mxdg-shell=$root_dir/src/generated/xdg-shell.zig $build_flags --dep wl_msg \
--Mxdg-decoration-unstable-v1=$root_dir/src/generated/xdg-decoration-unstable-v1.zig $build_flags --dep wl_msg \
--Mlinux-dmabuf-v1=$root_dir/src/generated/linux-dmabuf-v1.zig \
 -Mvulkan=$root_dir/src/generated/vk.zig \
 -lvulkan \
 -lc \
