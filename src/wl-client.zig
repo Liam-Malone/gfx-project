@@ -164,7 +164,7 @@ pub fn init(arena: *Arena) *Client {
 
         .surfaces = undefined,
         .focused_surface = 0,
-        .gfx_format = .abgr8888,
+        .gfx_format = undefined,
         .ev_thread = undefined,
     };
 
@@ -302,6 +302,16 @@ fn handle_event(client: *Client) !void {
                             }
                         },
                         else => {},
+                    };
+            },
+            .zxdg_toplevel_decoration_v1 => {
+                const action_opt = xdgd.ToplevelDecorationV1.Event.parse(ev.header.op, ev.data) catch null;
+
+                if (action_opt) |action|
+                    switch (action) {
+                        .configure => |configure| {
+                            log.info("Toplevel decoration mode set :: {s}", .{@tagName(configure.mode)});
+                        },
                     };
             },
             .zwp_linux_dmabuf_feedback_v1 => {
@@ -718,6 +728,7 @@ pub const Surface = struct {
                 break :buffer null;
             };
 
+            log.debug("Creating wl_buffer of dimensions :: {d}x{d}", .{ dims.x, dims.y });
             const wl_buffer = dmabuf_params.create_immed(writer, .{
                 .width = @intCast(dims.x),
                 .height = @intCast(dims.y),
