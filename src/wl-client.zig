@@ -57,7 +57,7 @@ gfx_format: Drm.Format,
 // Wayland event handling
 ev_thread: std.Thread,
 
-pub var ev_iter: Event.iter(2048) = undefined;
+pub var ev_iter: Event.iter(4096) = undefined;
 
 pub fn init(arena: *Arena) *Client {
     const alloc = arena.allocator();
@@ -223,8 +223,8 @@ fn handle_event(client: *Client) !void {
                 const action_opt: ?wl.Display.Event = wl.Display.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
-                        .delete_id => {
-                            log.warn("WARNING :: Display ID Deletion Not Yet Implemented", .{});
+                        .delete_id => |del_id| {
+                            log.warn("Compositor acknowledged deletion of ID {d}", .{del_id.id});
                         },
                         .@"error" => |err| {
                             log.err("wl_display::error => object id: {d}, code: {d}, msg: {s}", .{
