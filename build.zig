@@ -1,21 +1,5 @@
 const std = @import("std");
 
-const BindingsGenerator = struct {
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    binding_gen: *std.Build.Step.Compile,
-
-    pub fn gen_bindings(self: *const BindingsGenerator, protocols: [][]const u8) !void {
-        const binding_gen_run = self.b.addRunArtifact(self.binding_gen);
-
-        binding_gen_run.addArg("-p");
-        _ = binding_gen_run.addOutputDirectoryArg("src/generated");
-
-        binding_gen_run.addArgs(protocols);
-    }
-};
-
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -24,28 +8,24 @@ pub fn build(b: *std.Build) !void {
     const use_lld = b.option(bool, "use-lld", "Whether or not to use LLD as the linker") orelse use_llvm;
 
     // BEGIN Wayland-Bindings
-    const bindgen = b.addExecutable(.{
-        .name = "wl-bindgen",
-        .root_source_file = b.path("src/wl-bindgen.zig"),
-        .target = target,
-        .optimize = optimize,
-        .use_llvm = false,
-        .use_lld = false,
-    });
-
-    const bindings_generator: BindingsGenerator = .{
-        .b = b,
-        .target = target,
-        .optimize = optimize,
-        .binding_gen = bindgen,
-    };
-
-    var wl_protocols = [_][]const u8{
+    const wl_protocols = &.{
         b.pathFromRoot("protocols/wayland/wayland.xml"),
         b.pathFromRoot("protocols/wayland/xdg-shell.xml"),
         b.pathFromRoot("protocols/wayland/xdg-decoration-unstable-v1.xml"),
         b.pathFromRoot("protocols/wayland/linux-dmabuf-v1.xml"),
     };
+
+    const bindgen_run = b.addSystemCommand(&.{"zig"});
+    bindgen_run.addArgs(&.{
+        "run",
+        "src/wl-bindgen.zig",
+        "--",
+        "--cli",
+    });
+    bindgen_run.addArgs(wl_protocols);
+
+    const protocols_file = bindgen_run.captureStdOut();
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(protocols_file, .{ .custom = "../src/generated" }, "protocols.zig").step);
 
     // END Wayland-Bindings
     const exe = b.addExecutable(.{
@@ -57,17 +37,6 @@ pub fn build(b: *std.Build) !void {
         .use_llvm = use_llvm,
         .use_lld = use_lld,
     });
-
-    // TODO: Add windows and eventually macos support
-    switch (target.result.os.tag) {
-        .linux => {
-            try bindings_generator.gen_bindings(&wl_protocols);
-        },
-        else => {
-            std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
-            std.process.exit(1);
-        },
-    }
 
     if (b.lazyDependency("vulkan", .{
         .target = target,
@@ -94,16 +63,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-    // TODO: Add windows and eventually macos support
-    switch (target.result.os.tag) {
-        .linux => {
-            try bindings_generator.gen_bindings(&wl_protocols);
-        },
-        else => {
-            std.log.err("Unsupported Platform: {s}\n", .{@tagName(target.result.os.tag)});
-            std.process.exit(1);
-        },
-    }
 
     const test_step = b.step("test", "Run Tests");
     test_step.dependOn(&run_exe_unit_tests.step);

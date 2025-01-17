@@ -429,6 +429,7 @@ pub fn main() !void {
     var xml_opts = std.ArrayList([]const u8).init(arena.allocator());
     var file_outs = std.ArrayList(?[]const u8).init(arena.allocator());
     var absolute_protocol_paths = false;
+    var out_is_cli = false;
     var file_in = true;
     var debug = false;
     var out_pref_opt: ?[]const u8 = null;
@@ -440,6 +441,8 @@ pub fn main() !void {
                 std.log.err("Failed to write to stdout with err: {s}", .{@errorName(err)});
             };
             std.process.exit(1);
+        } else if (std.mem.eql(u8, arg, "--cli")) {
+            out_is_cli = true;
         } else if (std.mem.eql(u8, arg, "--out")) {
             file_in = false;
         } else if (std.mem.eql(u8, arg, "--debug")) {
@@ -466,8 +469,6 @@ pub fn main() !void {
     const cwd = std.fs.cwd();
 
     {
-        const out_file = if (protocol_filename) |filename| filename else "protocols.zig";
-
         var file_data: std.ArrayList(u8) = .init(allocator);
         const file_writer = file_data.writer();
 
@@ -529,25 +530,34 @@ pub fn main() !void {
             try stdout.writeAll(src);
         }
 
-        if (std.fs.path.dirname(out_file)) |dir| {
-            cwd.makePath(dir) catch |err| {
-                std.log.err("failed to create output directory '{s}' ({s})", .{ dir, @errorName(err) });
+        const protocol_filename_default: []const u8 = "protocols.zig";
+        const out_file = if (protocol_filename) |filename| filename else if (!file_in) protocol_filename_default else null;
+        if (out_file) |of| {
+            if (std.fs.path.dirname(of)) |dir| {
+                cwd.makePath(dir) catch |err| {
+                    std.log.err("failed to create output directory '{s}' ({s})", .{ dir, @errorName(err) });
+                    std.process.exit(1);
+                };
+            }
+
+            const out_path = if (out_pref_opt) |out_prefix|
+                try std.mem.join(arena.allocator(), "/", &[_][]const u8{ out_prefix, of })
+            else
+                of;
+
+            cwd.writeFile(.{
+                .sub_path = out_path,
+                .data = formatted,
+            }) catch |err| {
+                std.log.err("failed to write to output file '{s}' ({s})", .{ of, @errorName(err) });
                 std.process.exit(1);
             };
         }
-
-        const out_path = if (out_pref_opt) |out_prefix|
-            try std.mem.join(arena.allocator(), "/", &[_][]const u8{ out_prefix, out_file })
-        else
-            out_file;
-
-        cwd.writeFile(.{
-            .sub_path = out_path,
-            .data = formatted,
-        }) catch |err| {
-            std.log.err("failed to write to output file '{s}' ({s})", .{ out_file, @errorName(err) });
-            std.process.exit(1);
-        };
+        if (out_is_cli) {
+            stdout.writeAll(formatted) catch |err| {
+                std.log.err("failed to write output to console with err: {s}", .{@errorName(err)});
+            };
+        }
     }
 }
 

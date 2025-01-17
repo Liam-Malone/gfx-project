@@ -7,609 +7,6 @@ const std = @import("std");
 const interface = @import("../wl-interface.zig"); // assume provided by user"
 const msg = @import("../wl-msg.zig"); // assume provided by user"
 
-// ----------------------- BEGIN PROTOCOL: linux_dmabuf_v1 --------------------------
-
-pub const linux_dmabuf_v1 = struct {
-    const log = std.log.scoped(.linux_dmabuf_v1);
-
-    /// factory for creating dmabuf-based wl_buffers
-    pub const LinuxDmabufV1 = struct {
-        pub const name: [:0]const u8 = "zwp_linux_dmabuf_v1";
-
-        version: u32 = 5,
-        id: u32,
-
-        pub const destroy_params = struct {
-            pub const op = 0;
-        };
-
-        /// unbind the factory
-        pub fn destroy(
-            self: *const LinuxDmabufV1,
-            writer: anytype,
-            params: destroy_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-            interface.registry.remove(self.*);
-        }
-
-        pub const create_params_params = struct {
-            pub const op = 1;
-            /// the new temporary
-            params_id: ?u32 = null, // id for new zwp_linux_buffer_params_v1 object
-        };
-
-        /// create a temporary object for buffer parameters
-        pub fn create_params(
-            self: *const LinuxDmabufV1,
-            writer: anytype,
-            params: create_params_params,
-        ) !zwp_linux_buffer_params_v1 {
-            const res_id = init: {
-                if (params.params_id) |id| {
-                    try msg.write(writer, @TypeOf(params), params, self.id);
-                    try interface.registry.insert(id, zwp_linux_buffer_params_v1);
-                    break :init id;
-                } else {
-                    const _res = try interface.registry.register(zwp_linux_buffer_params_v1);
-                    var write_params: create_params_params = params;
-                    write_params.params_id = _res.id;
-                    try msg.write(writer, @TypeOf(params), write_params, self.id);
-                    break :init _res.id;
-                }
-            };
-            return .{ .id = res_id };
-        }
-
-        pub const get_default_feedback_params = struct {
-            pub const op = 2;
-            id: ?u32 = null, // id for new zwp_linux_dmabuf_feedback_v1 object
-        };
-
-        /// get default feedback
-        pub fn get_default_feedback(
-            self: *const LinuxDmabufV1,
-            writer: anytype,
-            params: get_default_feedback_params,
-        ) !zwp_linux_dmabuf_feedback_v1 {
-            const res_id = init: {
-                if (params.id) |id| {
-                    try msg.write(writer, @TypeOf(params), params, self.id);
-                    try interface.registry.insert(id, zwp_linux_dmabuf_feedback_v1);
-                    break :init id;
-                } else {
-                    const _res = try interface.registry.register(zwp_linux_dmabuf_feedback_v1);
-                    var write_params: get_default_feedback_params = params;
-                    write_params.id = _res.id;
-                    try msg.write(writer, @TypeOf(params), write_params, self.id);
-                    break :init _res.id;
-                }
-            };
-            return .{ .id = res_id };
-        }
-
-        pub const get_surface_feedback_params = struct {
-            pub const op = 3;
-            id: ?u32 = null, // id for new zwp_linux_dmabuf_feedback_v1 object
-            surface: u32,
-        };
-
-        /// get feedback for a surface
-        pub fn get_surface_feedback(
-            self: *const LinuxDmabufV1,
-            writer: anytype,
-            params: get_surface_feedback_params,
-        ) !zwp_linux_dmabuf_feedback_v1 {
-            const res_id = init: {
-                if (params.id) |id| {
-                    try msg.write(writer, @TypeOf(params), params, self.id);
-                    try interface.registry.insert(id, zwp_linux_dmabuf_feedback_v1);
-                    break :init id;
-                } else {
-                    const _res = try interface.registry.register(zwp_linux_dmabuf_feedback_v1);
-                    var write_params: get_surface_feedback_params = params;
-                    write_params.id = _res.id;
-                    try msg.write(writer, @TypeOf(params), write_params, self.id);
-                    break :init _res.id;
-                }
-            };
-            return .{ .id = res_id };
-        }
-
-        pub const Event = union(enum) {
-            format: Event.Format,
-            modifier: Event.Modifier,
-
-            /// supported buffer format
-            pub const Format = struct {
-                format: u32,
-            };
-
-            /// supported buffer format modifier
-            pub const Modifier = struct {
-                format: u32,
-                modifier_hi: u32,
-                modifier_lo: u32,
-            };
-            pub fn parse(op: u32, data: []const u8) !Event {
-                return switch (op) {
-                    0 => .{ .format = try msg.parse_data(Event.Format, data) },
-                    1 => .{ .modifier = try msg.parse_data(Event.Modifier, data) },
-                    else => {
-                        log.warn("Unknown linux_dmabuf_v1 event: {d}", .{op});
-                        return error.UnknownEvent;
-                    },
-                };
-            }
-        };
-    };
-
-    /// parameters for creating a dmabuf-based wl_buffer
-    pub const LinuxBufferParamsV1 = struct {
-        pub const name: [:0]const u8 = "zwp_linux_buffer_params_v1";
-
-        version: u32 = 5,
-        id: u32,
-        pub const Error = enum(u32) {
-            /// the dmabuf_batch object has already been used to create a wl_buffer
-            already_used = 0,
-            /// plane index out of bounds
-            plane_idx = 1,
-            /// the plane index was already set
-            plane_set = 2,
-            /// missing or too many planes to create a buffer
-            incomplete = 3,
-            /// format not supported
-            invalid_format = 4,
-            /// invalid width or height
-            invalid_dimensions = 5,
-            /// offset + stride * height goes out of dmabuf bounds
-            out_of_bounds = 6,
-            /// invalid wl_buffer resulted from importing dmabufs via the create_immed request on given buffer_params
-            invalid_wl_buffer = 7,
-        };
-        pub const Flags = packed struct(u32) {
-            /// contents are y-inverted
-            y_invert: bool = false,
-            /// content is interlaced
-            interlaced: bool = false,
-            /// bottom field first
-            bottom_first: bool = false,
-            __reserved_bit_3: bool = false,
-            __reserved_bit_4: bool = false,
-            __reserved_bit_5: bool = false,
-            __reserved_bit_6: bool = false,
-            __reserved_bit_7: bool = false,
-            __reserved_bit_8: bool = false,
-            __reserved_bit_9: bool = false,
-            __reserved_bit_10: bool = false,
-            __reserved_bit_11: bool = false,
-            __reserved_bit_12: bool = false,
-            __reserved_bit_13: bool = false,
-            __reserved_bit_14: bool = false,
-            __reserved_bit_15: bool = false,
-            __reserved_bit_16: bool = false,
-            __reserved_bit_17: bool = false,
-            __reserved_bit_18: bool = false,
-            __reserved_bit_19: bool = false,
-            __reserved_bit_20: bool = false,
-            __reserved_bit_21: bool = false,
-            __reserved_bit_22: bool = false,
-            __reserved_bit_23: bool = false,
-            __reserved_bit_24: bool = false,
-            __reserved_bit_25: bool = false,
-            __reserved_bit_26: bool = false,
-            __reserved_bit_27: bool = false,
-            __reserved_bit_28: bool = false,
-            __reserved_bit_29: bool = false,
-            __reserved_bit_30: bool = false,
-            __reserved_bit_31: bool = false,
-        };
-        pub const destroy_params = struct {
-            pub const op = 0;
-        };
-
-        /// delete this object, used or not
-        pub fn destroy(
-            self: *const LinuxBufferParamsV1,
-            writer: anytype,
-            params: destroy_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-            interface.registry.remove(self.*);
-        }
-
-        pub const add_params = struct {
-            pub const op = 1;
-            /// dmabuf fd
-            fd: std.posix.fd_t,
-            /// plane index
-            plane_idx: u32,
-            /// offset in bytes
-            offset: u32,
-            /// stride in bytes
-            stride: u32,
-            /// high 32 bits of layout modifier
-            modifier_hi: u32,
-            /// low 32 bits of layout modifier
-            modifier_lo: u32,
-        };
-
-        /// add a dmabuf to the temporary set
-        pub fn add(
-            self: *const LinuxBufferParamsV1,
-            writer: anytype,
-            params: add_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-        }
-
-        pub const create_params = struct {
-            pub const op = 2;
-            /// base plane width in pixels
-            width: i32,
-            /// base plane height in pixels
-            height: i32,
-            /// DRM_FORMAT code
-            format: u32,
-            /// see enum flags
-            flags: Flags,
-        };
-
-        /// create a wl_buffer from the given dmabufs
-        pub fn create(
-            self: *const LinuxBufferParamsV1,
-            writer: anytype,
-            params: create_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-        }
-
-        pub const create_immed_params = struct {
-            pub const op = 3;
-            /// id for the newly created wl_buffer
-            buffer_id: ?u32 = null, // id for new wl_buffer object
-            /// base plane width in pixels
-            width: i32,
-            /// base plane height in pixels
-            height: i32,
-            /// DRM_FORMAT code
-            format: u32,
-            /// see enum flags
-            flags: Flags,
-        };
-
-        /// immediately create a wl_buffer from the given dmabufs
-        pub fn create_immed(
-            self: *const LinuxBufferParamsV1,
-            writer: anytype,
-            params: create_immed_params,
-        ) !wl_buffer {
-            const res_id = init: {
-                if (params.buffer_id) |id| {
-                    try msg.write(writer, @TypeOf(params), params, self.id);
-                    try interface.registry.insert(id, wl_buffer);
-                    break :init id;
-                } else {
-                    const _res = try interface.registry.register(wl_buffer);
-                    var write_params: create_immed_params = params;
-                    write_params.buffer_id = _res.id;
-                    try msg.write(writer, @TypeOf(params), write_params, self.id);
-                    break :init _res.id;
-                }
-            };
-            return .{ .id = res_id };
-        }
-
-        pub const Event = union(enum) {
-            created: Event.Created,
-            failed: Event.Failed,
-
-            /// buffer creation succeeded
-            pub const Created = struct {
-                buffer: u32,
-            };
-
-            /// buffer creation failed
-            pub const Failed = struct {};
-            pub fn parse(op: u32, data: []const u8) !Event {
-                return switch (op) {
-                    0 => .{ .created = try msg.parse_data(Event.Created, data) },
-                    1 => .{ .failed = try msg.parse_data(Event.Failed, data) },
-                    else => {
-                        log.warn("Unknown linux_buffer_params_v1 event: {d}", .{op});
-                        return error.UnknownEvent;
-                    },
-                };
-            }
-        };
-    };
-
-    /// dmabuf feedback
-    pub const LinuxDmabufFeedbackV1 = struct {
-        pub const name: [:0]const u8 = "zwp_linux_dmabuf_feedback_v1";
-
-        version: u32 = 5,
-        id: u32,
-        pub const TrancheFlags = packed struct(u32) {
-            /// direct scan-out tranche
-            scanout: bool = false,
-            __reserved_bit_1: bool = false,
-            __reserved_bit_2: bool = false,
-            __reserved_bit_3: bool = false,
-            __reserved_bit_4: bool = false,
-            __reserved_bit_5: bool = false,
-            __reserved_bit_6: bool = false,
-            __reserved_bit_7: bool = false,
-            __reserved_bit_8: bool = false,
-            __reserved_bit_9: bool = false,
-            __reserved_bit_10: bool = false,
-            __reserved_bit_11: bool = false,
-            __reserved_bit_12: bool = false,
-            __reserved_bit_13: bool = false,
-            __reserved_bit_14: bool = false,
-            __reserved_bit_15: bool = false,
-            __reserved_bit_16: bool = false,
-            __reserved_bit_17: bool = false,
-            __reserved_bit_18: bool = false,
-            __reserved_bit_19: bool = false,
-            __reserved_bit_20: bool = false,
-            __reserved_bit_21: bool = false,
-            __reserved_bit_22: bool = false,
-            __reserved_bit_23: bool = false,
-            __reserved_bit_24: bool = false,
-            __reserved_bit_25: bool = false,
-            __reserved_bit_26: bool = false,
-            __reserved_bit_27: bool = false,
-            __reserved_bit_28: bool = false,
-            __reserved_bit_29: bool = false,
-            __reserved_bit_30: bool = false,
-            __reserved_bit_31: bool = false,
-        };
-        pub const destroy_params = struct {
-            pub const op = 0;
-        };
-
-        /// destroy the feedback object
-        pub fn destroy(
-            self: *const LinuxDmabufFeedbackV1,
-            writer: anytype,
-            params: destroy_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-            interface.registry.remove(self.*);
-        }
-
-        pub const Event = union(enum) {
-            done: Event.Done,
-            format_table: Event.FormatTable,
-            main_device: Event.MainDevice,
-            tranche_done: Event.TrancheDone,
-            tranche_target_device: Event.TrancheTargetDevice,
-            tranche_formats: Event.TrancheFormats,
-            tranche_flags: Event.TrancheFlags,
-
-            /// all feedback has been sent
-            pub const Done = struct {};
-
-            /// format and modifier table
-            pub const FormatTable = struct {
-                fd: std.posix.fd_t,
-                size: u32,
-            };
-
-            /// preferred main device
-            pub const MainDevice = struct {
-                device: []const u8,
-            };
-
-            /// a preference tranche has been sent
-            pub const TrancheDone = struct {};
-
-            /// target device
-            pub const TrancheTargetDevice = struct {
-                device: []const u8,
-            };
-
-            /// supported buffer format modifier
-            pub const TrancheFormats = struct {
-                indices: []const u8,
-            };
-
-            /// tranche flags
-            pub const TrancheFlags = struct {
-                flags: LinuxDmabufFeedbackV1.TrancheFlags,
-            };
-            pub fn parse(op: u32, data: []const u8) !Event {
-                return switch (op) {
-                    0 => .{ .done = try msg.parse_data(Event.Done, data) },
-                    1 => .{ .format_table = try msg.parse_data(Event.FormatTable, data) },
-                    2 => .{ .main_device = try msg.parse_data(Event.MainDevice, data) },
-                    3 => .{ .tranche_done = try msg.parse_data(Event.TrancheDone, data) },
-                    4 => .{ .tranche_target_device = try msg.parse_data(Event.TrancheTargetDevice, data) },
-                    5 => .{ .tranche_formats = try msg.parse_data(Event.TrancheFormats, data) },
-                    6 => .{ .tranche_flags = try msg.parse_data(Event.TrancheFlags, data) },
-                    else => {
-                        log.warn("Unknown linux_dmabuf_feedback_v1 event: {d}", .{op});
-                        return error.UnknownEvent;
-                    },
-                };
-            }
-        };
-    };
-};
-const zwp_linux_dmabuf_v1 = linux_dmabuf_v1.LinuxDmabufV1;
-const zwp_linux_buffer_params_v1 = linux_dmabuf_v1.LinuxBufferParamsV1;
-const zwp_linux_dmabuf_feedback_v1 = linux_dmabuf_v1.LinuxDmabufFeedbackV1;
-
-// ----------------------- END PROTOCOL: linux_dmabuf_v1 --------------------------
-
-// ----------------------- BEGIN PROTOCOL: presentation_time --------------------------
-
-pub const presentation_time = struct {
-    const log = std.log.scoped(.presentation_time);
-
-    /// timed presentation related wl_surface requests
-    pub const Presentation = struct {
-        pub const name: [:0]const u8 = "wp_presentation";
-
-        version: u32 = 2,
-        id: u32,
-
-        /// fatal presentation errors
-        pub const Error = enum(u32) {
-            /// invalid value in tv_nsec
-            invalid_timestamp = 0,
-            /// invalid flag
-            invalid_flag = 1,
-        };
-        pub const destroy_params = struct {
-            pub const op = 0;
-        };
-
-        /// unbind from the presentation interface
-        pub fn destroy(
-            self: *const Presentation,
-            writer: anytype,
-            params: destroy_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-            interface.registry.remove(self.*);
-        }
-
-        pub const feedback_params = struct {
-            pub const op = 1;
-            /// target surface
-            surface: u32,
-            /// new feedback object
-            callback: ?u32 = null, // id for new wp_presentation_feedback object
-        };
-
-        /// request presentation feedback information
-        pub fn feedback(
-            self: *const Presentation,
-            writer: anytype,
-            params: feedback_params,
-        ) !wp_presentation_feedback {
-            const res_id = init: {
-                if (params.callback) |id| {
-                    try msg.write(writer, @TypeOf(params), params, self.id);
-                    try interface.registry.insert(id, wp_presentation_feedback);
-                    break :init id;
-                } else {
-                    const _res = try interface.registry.register(wp_presentation_feedback);
-                    var write_params: feedback_params = params;
-                    write_params.callback = _res.id;
-                    try msg.write(writer, @TypeOf(params), write_params, self.id);
-                    break :init _res.id;
-                }
-            };
-            return .{ .id = res_id };
-        }
-
-        pub const Event = union(enum) {
-            clock_id: Event.ClockId,
-
-            /// clock ID for timestamps
-            pub const ClockId = struct {
-                clk_id: u32,
-            };
-            pub fn parse(op: u32, data: []const u8) !Event {
-                return switch (op) {
-                    0 => .{ .clock_id = try msg.parse_data(Event.ClockId, data) },
-                    else => {
-                        log.warn("Unknown presentation event: {d}", .{op});
-                        return error.UnknownEvent;
-                    },
-                };
-            }
-        };
-    };
-
-    /// presentation time feedback event
-    pub const PresentationFeedback = struct {
-        pub const name: [:0]const u8 = "wp_presentation_feedback";
-
-        version: u32 = 2,
-        id: u32,
-
-        /// bitmask of flags in presented event
-        pub const Kind = packed struct(u32) {
-            vsync: bool = false,
-            hw_clock: bool = false,
-            hw_completion: bool = false,
-            zero_copy: bool = false,
-            __reserved_bit_4: bool = false,
-            __reserved_bit_5: bool = false,
-            __reserved_bit_6: bool = false,
-            __reserved_bit_7: bool = false,
-            __reserved_bit_8: bool = false,
-            __reserved_bit_9: bool = false,
-            __reserved_bit_10: bool = false,
-            __reserved_bit_11: bool = false,
-            __reserved_bit_12: bool = false,
-            __reserved_bit_13: bool = false,
-            __reserved_bit_14: bool = false,
-            __reserved_bit_15: bool = false,
-            __reserved_bit_16: bool = false,
-            __reserved_bit_17: bool = false,
-            __reserved_bit_18: bool = false,
-            __reserved_bit_19: bool = false,
-            __reserved_bit_20: bool = false,
-            __reserved_bit_21: bool = false,
-            __reserved_bit_22: bool = false,
-            __reserved_bit_23: bool = false,
-            __reserved_bit_24: bool = false,
-            __reserved_bit_25: bool = false,
-            __reserved_bit_26: bool = false,
-            __reserved_bit_27: bool = false,
-            __reserved_bit_28: bool = false,
-            __reserved_bit_29: bool = false,
-            __reserved_bit_30: bool = false,
-            __reserved_bit_31: bool = false,
-        };
-        pub const Event = union(enum) {
-            sync_output: Event.SyncOutput,
-            presented: Event.Presented,
-            discarded: Event.Discarded,
-
-            /// presentation synchronized to this output
-            pub const SyncOutput = struct {
-                output: u32,
-            };
-
-            /// the content update was displayed
-            pub const Presented = struct {
-                tv_sec_hi: u32,
-                tv_sec_lo: u32,
-                tv_nsec: u32,
-                refresh: u32,
-                seq_hi: u32,
-                seq_lo: u32,
-                flags: PresentationFeedback.Kind,
-            };
-
-            /// the content update was not displayed
-            pub const Discarded = struct {};
-            pub fn parse(op: u32, data: []const u8) !Event {
-                return switch (op) {
-                    0 => .{ .sync_output = try msg.parse_data(Event.SyncOutput, data) },
-                    1 => .{ .presented = try msg.parse_data(Event.Presented, data) },
-                    2 => .{ .discarded = try msg.parse_data(Event.Discarded, data) },
-                    else => {
-                        log.warn("Unknown presentation_feedback event: {d}", .{op});
-                        return error.UnknownEvent;
-                    },
-                };
-            }
-        };
-    };
-};
-const wp_presentation = presentation_time.Presentation;
-const wp_presentation_feedback = presentation_time.PresentationFeedback;
-
-// ----------------------- END PROTOCOL: presentation_time --------------------------
-
 // ----------------------- BEGIN PROTOCOL: wayland --------------------------
 
 pub const wayland = struct {
@@ -3295,150 +2692,6 @@ const wl_subsurface = wayland.Subsurface;
 
 // ----------------------- END PROTOCOL: wayland --------------------------
 
-// ----------------------- BEGIN PROTOCOL: xdg_decoration_unstable_v1 --------------------------
-
-pub const xdg_decoration_unstable_v1 = struct {
-    const log = std.log.scoped(.xdg_decoration_unstable_v1);
-
-    /// window decoration manager
-    pub const DecorationManagerV1 = struct {
-        pub const name: [:0]const u8 = "zxdg_decoration_manager_v1";
-
-        version: u32 = 1,
-        id: u32,
-
-        pub const destroy_params = struct {
-            pub const op = 0;
-        };
-
-        /// destroy the decoration manager object
-        pub fn destroy(
-            self: *const DecorationManagerV1,
-            writer: anytype,
-            params: destroy_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-            interface.registry.remove(self.*);
-        }
-
-        pub const get_toplevel_decoration_params = struct {
-            pub const op = 1;
-            id: ?u32 = null, // id for new zxdg_toplevel_decoration_v1 object
-            toplevel: u32,
-        };
-
-        /// create a new toplevel decoration object
-        pub fn get_toplevel_decoration(
-            self: *const DecorationManagerV1,
-            writer: anytype,
-            params: get_toplevel_decoration_params,
-        ) !zxdg_toplevel_decoration_v1 {
-            const res_id = init: {
-                if (params.id) |id| {
-                    try msg.write(writer, @TypeOf(params), params, self.id);
-                    try interface.registry.insert(id, zxdg_toplevel_decoration_v1);
-                    break :init id;
-                } else {
-                    const _res = try interface.registry.register(zxdg_toplevel_decoration_v1);
-                    var write_params: get_toplevel_decoration_params = params;
-                    write_params.id = _res.id;
-                    try msg.write(writer, @TypeOf(params), write_params, self.id);
-                    break :init _res.id;
-                }
-            };
-            return .{ .id = res_id };
-        }
-    };
-
-    /// decoration object for a toplevel surface
-    pub const ToplevelDecorationV1 = struct {
-        pub const name: [:0]const u8 = "zxdg_toplevel_decoration_v1";
-
-        version: u32 = 1,
-        id: u32,
-        pub const Error = enum(u32) {
-            /// xdg_toplevel has a buffer attached before configure
-            unconfigured_buffer = 0,
-            /// xdg_toplevel already has a decoration object
-            already_constructed = 1,
-            /// xdg_toplevel destroyed before the decoration object
-            orphaned = 2,
-            /// invalid mode
-            invalid_mode = 3,
-        };
-        /// window decoration modes
-        pub const Mode = enum(u32) {
-            /// no server-side window decoration
-            client_side = 1,
-            /// server-side window decoration
-            server_side = 2,
-        };
-        pub const destroy_params = struct {
-            pub const op = 0;
-        };
-
-        /// destroy the decoration object
-        pub fn destroy(
-            self: *const ToplevelDecorationV1,
-            writer: anytype,
-            params: destroy_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-            interface.registry.remove(self.*);
-        }
-
-        pub const set_mode_params = struct {
-            pub const op = 1;
-            /// the decoration mode
-            mode: Mode,
-        };
-
-        /// set the decoration mode
-        pub fn set_mode(
-            self: *const ToplevelDecorationV1,
-            writer: anytype,
-            params: set_mode_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-        }
-
-        pub const unset_mode_params = struct {
-            pub const op = 2;
-        };
-
-        /// unset the decoration mode
-        pub fn unset_mode(
-            self: *const ToplevelDecorationV1,
-            writer: anytype,
-            params: unset_mode_params,
-        ) !void {
-            try msg.write(writer, @TypeOf(params), params, self.id);
-        }
-
-        pub const Event = union(enum) {
-            configure: Event.Configure,
-
-            /// notify a decoration mode change
-            pub const Configure = struct {
-                mode: ToplevelDecorationV1.Mode,
-            };
-            pub fn parse(op: u32, data: []const u8) !Event {
-                return switch (op) {
-                    0 => .{ .configure = try msg.parse_data(Event.Configure, data) },
-                    else => {
-                        log.warn("Unknown toplevel_decoration_v1 event: {d}", .{op});
-                        return error.UnknownEvent;
-                    },
-                };
-            }
-        };
-    };
-};
-const zxdg_decoration_manager_v1 = xdg_decoration_unstable_v1.DecorationManagerV1;
-const zxdg_toplevel_decoration_v1 = xdg_decoration_unstable_v1.ToplevelDecorationV1;
-
-// ----------------------- END PROTOCOL: xdg_decoration_unstable_v1 --------------------------
-
 // ----------------------- BEGIN PROTOCOL: xdg_shell --------------------------
 
 pub const xdg_shell = struct {
@@ -4337,3 +3590,584 @@ const xdg_toplevel = xdg_shell.Toplevel;
 const xdg_popup = xdg_shell.Popup;
 
 // ----------------------- END PROTOCOL: xdg_shell --------------------------
+
+// ----------------------- BEGIN PROTOCOL: xdg_decoration_unstable_v1 --------------------------
+
+pub const xdg_decoration_unstable_v1 = struct {
+    const log = std.log.scoped(.xdg_decoration_unstable_v1);
+
+    /// window decoration manager
+    pub const DecorationManagerV1 = struct {
+        pub const name: [:0]const u8 = "zxdg_decoration_manager_v1";
+
+        version: u32 = 1,
+        id: u32,
+
+        pub const destroy_params = struct {
+            pub const op = 0;
+        };
+
+        /// destroy the decoration manager object
+        pub fn destroy(
+            self: *const DecorationManagerV1,
+            writer: anytype,
+            params: destroy_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+            interface.registry.remove(self.*);
+        }
+
+        pub const get_toplevel_decoration_params = struct {
+            pub const op = 1;
+            id: ?u32 = null, // id for new zxdg_toplevel_decoration_v1 object
+            toplevel: u32,
+        };
+
+        /// create a new toplevel decoration object
+        pub fn get_toplevel_decoration(
+            self: *const DecorationManagerV1,
+            writer: anytype,
+            params: get_toplevel_decoration_params,
+        ) !zxdg_toplevel_decoration_v1 {
+            const res_id = init: {
+                if (params.id) |id| {
+                    try msg.write(writer, @TypeOf(params), params, self.id);
+                    try interface.registry.insert(id, zxdg_toplevel_decoration_v1);
+                    break :init id;
+                } else {
+                    const _res = try interface.registry.register(zxdg_toplevel_decoration_v1);
+                    var write_params: get_toplevel_decoration_params = params;
+                    write_params.id = _res.id;
+                    try msg.write(writer, @TypeOf(params), write_params, self.id);
+                    break :init _res.id;
+                }
+            };
+            return .{ .id = res_id };
+        }
+    };
+
+    /// decoration object for a toplevel surface
+    pub const ToplevelDecorationV1 = struct {
+        pub const name: [:0]const u8 = "zxdg_toplevel_decoration_v1";
+
+        version: u32 = 1,
+        id: u32,
+        pub const Error = enum(u32) {
+            /// xdg_toplevel has a buffer attached before configure
+            unconfigured_buffer = 0,
+            /// xdg_toplevel already has a decoration object
+            already_constructed = 1,
+            /// xdg_toplevel destroyed before the decoration object
+            orphaned = 2,
+            /// invalid mode
+            invalid_mode = 3,
+        };
+        /// window decoration modes
+        pub const Mode = enum(u32) {
+            /// no server-side window decoration
+            client_side = 1,
+            /// server-side window decoration
+            server_side = 2,
+        };
+        pub const destroy_params = struct {
+            pub const op = 0;
+        };
+
+        /// destroy the decoration object
+        pub fn destroy(
+            self: *const ToplevelDecorationV1,
+            writer: anytype,
+            params: destroy_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+            interface.registry.remove(self.*);
+        }
+
+        pub const set_mode_params = struct {
+            pub const op = 1;
+            /// the decoration mode
+            mode: Mode,
+        };
+
+        /// set the decoration mode
+        pub fn set_mode(
+            self: *const ToplevelDecorationV1,
+            writer: anytype,
+            params: set_mode_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+        }
+
+        pub const unset_mode_params = struct {
+            pub const op = 2;
+        };
+
+        /// unset the decoration mode
+        pub fn unset_mode(
+            self: *const ToplevelDecorationV1,
+            writer: anytype,
+            params: unset_mode_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+        }
+
+        pub const Event = union(enum) {
+            configure: Event.Configure,
+
+            /// notify a decoration mode change
+            pub const Configure = struct {
+                mode: ToplevelDecorationV1.Mode,
+            };
+            pub fn parse(op: u32, data: []const u8) !Event {
+                return switch (op) {
+                    0 => .{ .configure = try msg.parse_data(Event.Configure, data) },
+                    else => {
+                        log.warn("Unknown toplevel_decoration_v1 event: {d}", .{op});
+                        return error.UnknownEvent;
+                    },
+                };
+            }
+        };
+    };
+};
+const zxdg_decoration_manager_v1 = xdg_decoration_unstable_v1.DecorationManagerV1;
+const zxdg_toplevel_decoration_v1 = xdg_decoration_unstable_v1.ToplevelDecorationV1;
+
+// ----------------------- END PROTOCOL: xdg_decoration_unstable_v1 --------------------------
+
+// ----------------------- BEGIN PROTOCOL: linux_dmabuf_v1 --------------------------
+
+pub const linux_dmabuf_v1 = struct {
+    const log = std.log.scoped(.linux_dmabuf_v1);
+
+    /// factory for creating dmabuf-based wl_buffers
+    pub const LinuxDmabufV1 = struct {
+        pub const name: [:0]const u8 = "zwp_linux_dmabuf_v1";
+
+        version: u32 = 5,
+        id: u32,
+
+        pub const destroy_params = struct {
+            pub const op = 0;
+        };
+
+        /// unbind the factory
+        pub fn destroy(
+            self: *const LinuxDmabufV1,
+            writer: anytype,
+            params: destroy_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+            interface.registry.remove(self.*);
+        }
+
+        pub const create_params_params = struct {
+            pub const op = 1;
+            /// the new temporary
+            params_id: ?u32 = null, // id for new zwp_linux_buffer_params_v1 object
+        };
+
+        /// create a temporary object for buffer parameters
+        pub fn create_params(
+            self: *const LinuxDmabufV1,
+            writer: anytype,
+            params: create_params_params,
+        ) !zwp_linux_buffer_params_v1 {
+            const res_id = init: {
+                if (params.params_id) |id| {
+                    try msg.write(writer, @TypeOf(params), params, self.id);
+                    try interface.registry.insert(id, zwp_linux_buffer_params_v1);
+                    break :init id;
+                } else {
+                    const _res = try interface.registry.register(zwp_linux_buffer_params_v1);
+                    var write_params: create_params_params = params;
+                    write_params.params_id = _res.id;
+                    try msg.write(writer, @TypeOf(params), write_params, self.id);
+                    break :init _res.id;
+                }
+            };
+            return .{ .id = res_id };
+        }
+
+        pub const get_default_feedback_params = struct {
+            pub const op = 2;
+            id: ?u32 = null, // id for new zwp_linux_dmabuf_feedback_v1 object
+        };
+
+        /// get default feedback
+        pub fn get_default_feedback(
+            self: *const LinuxDmabufV1,
+            writer: anytype,
+            params: get_default_feedback_params,
+        ) !zwp_linux_dmabuf_feedback_v1 {
+            const res_id = init: {
+                if (params.id) |id| {
+                    try msg.write(writer, @TypeOf(params), params, self.id);
+                    try interface.registry.insert(id, zwp_linux_dmabuf_feedback_v1);
+                    break :init id;
+                } else {
+                    const _res = try interface.registry.register(zwp_linux_dmabuf_feedback_v1);
+                    var write_params: get_default_feedback_params = params;
+                    write_params.id = _res.id;
+                    try msg.write(writer, @TypeOf(params), write_params, self.id);
+                    break :init _res.id;
+                }
+            };
+            return .{ .id = res_id };
+        }
+
+        pub const get_surface_feedback_params = struct {
+            pub const op = 3;
+            id: ?u32 = null, // id for new zwp_linux_dmabuf_feedback_v1 object
+            surface: u32,
+        };
+
+        /// get feedback for a surface
+        pub fn get_surface_feedback(
+            self: *const LinuxDmabufV1,
+            writer: anytype,
+            params: get_surface_feedback_params,
+        ) !zwp_linux_dmabuf_feedback_v1 {
+            const res_id = init: {
+                if (params.id) |id| {
+                    try msg.write(writer, @TypeOf(params), params, self.id);
+                    try interface.registry.insert(id, zwp_linux_dmabuf_feedback_v1);
+                    break :init id;
+                } else {
+                    const _res = try interface.registry.register(zwp_linux_dmabuf_feedback_v1);
+                    var write_params: get_surface_feedback_params = params;
+                    write_params.id = _res.id;
+                    try msg.write(writer, @TypeOf(params), write_params, self.id);
+                    break :init _res.id;
+                }
+            };
+            return .{ .id = res_id };
+        }
+
+        pub const Event = union(enum) {
+            format: Event.Format,
+            modifier: Event.Modifier,
+
+            /// supported buffer format
+            pub const Format = struct {
+                format: u32,
+            };
+
+            /// supported buffer format modifier
+            pub const Modifier = struct {
+                format: u32,
+                modifier_hi: u32,
+                modifier_lo: u32,
+            };
+            pub fn parse(op: u32, data: []const u8) !Event {
+                return switch (op) {
+                    0 => .{ .format = try msg.parse_data(Event.Format, data) },
+                    1 => .{ .modifier = try msg.parse_data(Event.Modifier, data) },
+                    else => {
+                        log.warn("Unknown linux_dmabuf_v1 event: {d}", .{op});
+                        return error.UnknownEvent;
+                    },
+                };
+            }
+        };
+    };
+
+    /// parameters for creating a dmabuf-based wl_buffer
+    pub const LinuxBufferParamsV1 = struct {
+        pub const name: [:0]const u8 = "zwp_linux_buffer_params_v1";
+
+        version: u32 = 5,
+        id: u32,
+        pub const Error = enum(u32) {
+            /// the dmabuf_batch object has already been used to create a wl_buffer
+            already_used = 0,
+            /// plane index out of bounds
+            plane_idx = 1,
+            /// the plane index was already set
+            plane_set = 2,
+            /// missing or too many planes to create a buffer
+            incomplete = 3,
+            /// format not supported
+            invalid_format = 4,
+            /// invalid width or height
+            invalid_dimensions = 5,
+            /// offset + stride * height goes out of dmabuf bounds
+            out_of_bounds = 6,
+            /// invalid wl_buffer resulted from importing dmabufs via the create_immed request on given buffer_params
+            invalid_wl_buffer = 7,
+        };
+        pub const Flags = packed struct(u32) {
+            /// contents are y-inverted
+            y_invert: bool = false,
+            /// content is interlaced
+            interlaced: bool = false,
+            /// bottom field first
+            bottom_first: bool = false,
+            __reserved_bit_3: bool = false,
+            __reserved_bit_4: bool = false,
+            __reserved_bit_5: bool = false,
+            __reserved_bit_6: bool = false,
+            __reserved_bit_7: bool = false,
+            __reserved_bit_8: bool = false,
+            __reserved_bit_9: bool = false,
+            __reserved_bit_10: bool = false,
+            __reserved_bit_11: bool = false,
+            __reserved_bit_12: bool = false,
+            __reserved_bit_13: bool = false,
+            __reserved_bit_14: bool = false,
+            __reserved_bit_15: bool = false,
+            __reserved_bit_16: bool = false,
+            __reserved_bit_17: bool = false,
+            __reserved_bit_18: bool = false,
+            __reserved_bit_19: bool = false,
+            __reserved_bit_20: bool = false,
+            __reserved_bit_21: bool = false,
+            __reserved_bit_22: bool = false,
+            __reserved_bit_23: bool = false,
+            __reserved_bit_24: bool = false,
+            __reserved_bit_25: bool = false,
+            __reserved_bit_26: bool = false,
+            __reserved_bit_27: bool = false,
+            __reserved_bit_28: bool = false,
+            __reserved_bit_29: bool = false,
+            __reserved_bit_30: bool = false,
+            __reserved_bit_31: bool = false,
+        };
+        pub const destroy_params = struct {
+            pub const op = 0;
+        };
+
+        /// delete this object, used or not
+        pub fn destroy(
+            self: *const LinuxBufferParamsV1,
+            writer: anytype,
+            params: destroy_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+            interface.registry.remove(self.*);
+        }
+
+        pub const add_params = struct {
+            pub const op = 1;
+            /// dmabuf fd
+            fd: std.posix.fd_t,
+            /// plane index
+            plane_idx: u32,
+            /// offset in bytes
+            offset: u32,
+            /// stride in bytes
+            stride: u32,
+            /// high 32 bits of layout modifier
+            modifier_hi: u32,
+            /// low 32 bits of layout modifier
+            modifier_lo: u32,
+        };
+
+        /// add a dmabuf to the temporary set
+        pub fn add(
+            self: *const LinuxBufferParamsV1,
+            writer: anytype,
+            params: add_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+        }
+
+        pub const create_params = struct {
+            pub const op = 2;
+            /// base plane width in pixels
+            width: i32,
+            /// base plane height in pixels
+            height: i32,
+            /// DRM_FORMAT code
+            format: u32,
+            /// see enum flags
+            flags: Flags,
+        };
+
+        /// create a wl_buffer from the given dmabufs
+        pub fn create(
+            self: *const LinuxBufferParamsV1,
+            writer: anytype,
+            params: create_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+        }
+
+        pub const create_immed_params = struct {
+            pub const op = 3;
+            /// id for the newly created wl_buffer
+            buffer_id: ?u32 = null, // id for new wl_buffer object
+            /// base plane width in pixels
+            width: i32,
+            /// base plane height in pixels
+            height: i32,
+            /// DRM_FORMAT code
+            format: u32,
+            /// see enum flags
+            flags: Flags,
+        };
+
+        /// immediately create a wl_buffer from the given dmabufs
+        pub fn create_immed(
+            self: *const LinuxBufferParamsV1,
+            writer: anytype,
+            params: create_immed_params,
+        ) !wl_buffer {
+            const res_id = init: {
+                if (params.buffer_id) |id| {
+                    try msg.write(writer, @TypeOf(params), params, self.id);
+                    try interface.registry.insert(id, wl_buffer);
+                    break :init id;
+                } else {
+                    const _res = try interface.registry.register(wl_buffer);
+                    var write_params: create_immed_params = params;
+                    write_params.buffer_id = _res.id;
+                    try msg.write(writer, @TypeOf(params), write_params, self.id);
+                    break :init _res.id;
+                }
+            };
+            return .{ .id = res_id };
+        }
+
+        pub const Event = union(enum) {
+            created: Event.Created,
+            failed: Event.Failed,
+
+            /// buffer creation succeeded
+            pub const Created = struct {
+                buffer: u32,
+            };
+
+            /// buffer creation failed
+            pub const Failed = struct {};
+            pub fn parse(op: u32, data: []const u8) !Event {
+                return switch (op) {
+                    0 => .{ .created = try msg.parse_data(Event.Created, data) },
+                    1 => .{ .failed = try msg.parse_data(Event.Failed, data) },
+                    else => {
+                        log.warn("Unknown linux_buffer_params_v1 event: {d}", .{op});
+                        return error.UnknownEvent;
+                    },
+                };
+            }
+        };
+    };
+
+    /// dmabuf feedback
+    pub const LinuxDmabufFeedbackV1 = struct {
+        pub const name: [:0]const u8 = "zwp_linux_dmabuf_feedback_v1";
+
+        version: u32 = 5,
+        id: u32,
+        pub const TrancheFlags = packed struct(u32) {
+            /// direct scan-out tranche
+            scanout: bool = false,
+            __reserved_bit_1: bool = false,
+            __reserved_bit_2: bool = false,
+            __reserved_bit_3: bool = false,
+            __reserved_bit_4: bool = false,
+            __reserved_bit_5: bool = false,
+            __reserved_bit_6: bool = false,
+            __reserved_bit_7: bool = false,
+            __reserved_bit_8: bool = false,
+            __reserved_bit_9: bool = false,
+            __reserved_bit_10: bool = false,
+            __reserved_bit_11: bool = false,
+            __reserved_bit_12: bool = false,
+            __reserved_bit_13: bool = false,
+            __reserved_bit_14: bool = false,
+            __reserved_bit_15: bool = false,
+            __reserved_bit_16: bool = false,
+            __reserved_bit_17: bool = false,
+            __reserved_bit_18: bool = false,
+            __reserved_bit_19: bool = false,
+            __reserved_bit_20: bool = false,
+            __reserved_bit_21: bool = false,
+            __reserved_bit_22: bool = false,
+            __reserved_bit_23: bool = false,
+            __reserved_bit_24: bool = false,
+            __reserved_bit_25: bool = false,
+            __reserved_bit_26: bool = false,
+            __reserved_bit_27: bool = false,
+            __reserved_bit_28: bool = false,
+            __reserved_bit_29: bool = false,
+            __reserved_bit_30: bool = false,
+            __reserved_bit_31: bool = false,
+        };
+        pub const destroy_params = struct {
+            pub const op = 0;
+        };
+
+        /// destroy the feedback object
+        pub fn destroy(
+            self: *const LinuxDmabufFeedbackV1,
+            writer: anytype,
+            params: destroy_params,
+        ) !void {
+            try msg.write(writer, @TypeOf(params), params, self.id);
+            interface.registry.remove(self.*);
+        }
+
+        pub const Event = union(enum) {
+            done: Event.Done,
+            format_table: Event.FormatTable,
+            main_device: Event.MainDevice,
+            tranche_done: Event.TrancheDone,
+            tranche_target_device: Event.TrancheTargetDevice,
+            tranche_formats: Event.TrancheFormats,
+            tranche_flags: Event.TrancheFlags,
+
+            /// all feedback has been sent
+            pub const Done = struct {};
+
+            /// format and modifier table
+            pub const FormatTable = struct {
+                fd: std.posix.fd_t,
+                size: u32,
+            };
+
+            /// preferred main device
+            pub const MainDevice = struct {
+                device: []const u8,
+            };
+
+            /// a preference tranche has been sent
+            pub const TrancheDone = struct {};
+
+            /// target device
+            pub const TrancheTargetDevice = struct {
+                device: []const u8,
+            };
+
+            /// supported buffer format modifier
+            pub const TrancheFormats = struct {
+                indices: []const u8,
+            };
+
+            /// tranche flags
+            pub const TrancheFlags = struct {
+                flags: LinuxDmabufFeedbackV1.TrancheFlags,
+            };
+            pub fn parse(op: u32, data: []const u8) !Event {
+                return switch (op) {
+                    0 => .{ .done = try msg.parse_data(Event.Done, data) },
+                    1 => .{ .format_table = try msg.parse_data(Event.FormatTable, data) },
+                    2 => .{ .main_device = try msg.parse_data(Event.MainDevice, data) },
+                    3 => .{ .tranche_done = try msg.parse_data(Event.TrancheDone, data) },
+                    4 => .{ .tranche_target_device = try msg.parse_data(Event.TrancheTargetDevice, data) },
+                    5 => .{ .tranche_formats = try msg.parse_data(Event.TrancheFormats, data) },
+                    6 => .{ .tranche_flags = try msg.parse_data(Event.TrancheFlags, data) },
+                    else => {
+                        log.warn("Unknown linux_dmabuf_feedback_v1 event: {d}", .{op});
+                        return error.UnknownEvent;
+                    },
+                };
+            }
+        };
+    };
+};
+const zwp_linux_dmabuf_v1 = linux_dmabuf_v1.LinuxDmabufV1;
+const zwp_linux_buffer_params_v1 = linux_dmabuf_v1.LinuxBufferParamsV1;
+const zwp_linux_dmabuf_feedback_v1 = linux_dmabuf_v1.LinuxDmabufFeedbackV1;
+
+// ----------------------- END PROTOCOL: linux_dmabuf_v1 --------------------------
