@@ -20,8 +20,14 @@ const log = std.log.scoped(.@"wayland-client");
 const Client = @This();
 
 pub const nil: Client = .{
+    // Client arena
+    .arena = undefined,
+
+    // Base Wayland Connection
     .socket = -1,
     .connection = undefined,
+
+    // Required Wayland Global Objects
     .display = undefined,
     .registry = undefined,
     .compositor = undefined,
@@ -30,11 +36,27 @@ pub const nil: Client = .{
     .decorations = undefined,
     .dmabuf = undefined,
 
+    // Windows
     .surfaces = undefined,
-    .gfx_format = undefined,
 
+    // Display/Graphics formats
+    .gfx_format = undefined,
+    .format_mod_pairs = undefined,
+    .supported_format_mod_pairs = undefined,
+
+    // Input devices
+    .keyboard = undefined, // Keyboard/OtherDevice input
+    .pointer = undefined, // Mouse/Trackpad input
+    .touch = undefined, // Touchscreen input
+
+    .should_exit = false,
+
+    // Wayland event handling
     .ev_thread = undefined,
 };
+
+// Arena for longer-lived allocations
+arena: *Arena,
 
 // Base wayland connection
 socket: std.posix.fd_t,
@@ -52,8 +74,18 @@ dmabuf: dmab.LinuxDmabufV1,
 // Windows
 surfaces: std.ArrayList(*Surface),
 focused_surface: usize = 0,
-gfx_format: Drm.Format,
 
+// Display/Graphics formats
+gfx_format: Drm.Format,
+format_mod_pairs: []FormatModPair,
+supported_format_mod_pairs: []FormatModPair,
+
+// Input devices
+keyboard: wl.Keyboard, // Keyboard/OtherDevice input
+pointer: wl.Pointer, // Mouse/Trackpad input
+touch: wl.Touch, // Touchscreen input
+
+should_exit: bool = false,
 // Wayland event handling
 ev_thread: std.Thread,
 
@@ -86,6 +118,7 @@ pub fn init(arena: *Arena) *Client {
         log.err("Failed to load wayland events with err :: {s}", .{@errorName(err)});
         return @constCast(&Client.nil);
     };
+
     // Bind interfaces
     while (ev_iter.next() catch return @constCast(&Client.nil)) |ev| {
         if (interface.registry.get(ev.header.id)) |registry_interface| {
@@ -112,7 +145,7 @@ pub fn init(arena: *Arena) *Client {
                         };
                     } else if (std.mem.eql(u8, global.interface, xdgd.DecorationManagerV1.name)) {
                         decorations_opt = interface.registry.bind(xdgd.DecorationManagerV1, connection_writer, global) catch |err| nil: {
-                            log.err("Failed to bind zxdg__decoration_manager with error: {s}", .{@errorName(err)});
+                            log.err("Failed to bind zxdg_decoration_manager with error: {s}", .{@errorName(err)});
                             break :nil null;
                         };
                     } else if (std.mem.eql(u8, global.interface, dmab.LinuxDmabufV1.name)) {
@@ -123,7 +156,7 @@ pub fn init(arena: *Arena) *Client {
                     }
                 },
                 .global_remove => {
-                    log.warn("Unexpected global remove event", .{});
+                    log.warn("Unexpected global remove event during interface bind stage", .{});
                 },
             };
         }
@@ -150,10 +183,29 @@ pub fn init(arena: *Arena) *Client {
         return @constCast(&Client.nil);
     };
 
+    const wl_keyboard = wl_seat.get_keyboard(connection_writer, .{}) catch |err| {
+        log.err("Failed to write wl_seat.get_keyboard() request with err :: {s}", .{@errorName(err)});
+        return @constCast(&Client.nil);
+    };
+    const wl_pointer = wl_seat.get_pointer(connection_writer, .{}) catch |err| {
+        log.err("Failed to write wl_seat.get_pointer() request with err :: {s}", .{@errorName(err)});
+        return @constCast(&Client.nil);
+    };
+    const wl_touch = wl_seat.get_touch(connection_writer, .{}) catch |err| {
+        log.err("Failed to write wl_seat.get_touch() request with err :: {s}", .{@errorName(err)});
+        return @constCast(&Client.nil);
+    };
+
     const client_ptr = arena.create(Client);
     client_ptr.* = .{
+        // Arena
+        .arena = arena,
+
+        // Base Wayland Connection
         .socket = connection.handle,
         .connection = connection,
+
+        // Global Wayland Objects
         .display = display,
         .registry = &interface.registry,
         .compositor = wl_compositor,
@@ -162,9 +214,21 @@ pub fn init(arena: *Arena) *Client {
         .decorations = xdg_decorations,
         .dmabuf = linux_dmabuf,
 
+        // Windows
         .surfaces = undefined,
         .focused_surface = 0,
+
+        // Graphics/Display formats
         .gfx_format = undefined,
+        .format_mod_pairs = undefined,
+        .supported_format_mod_pairs = undefined,
+
+        // Inputs
+        .keyboard = wl_keyboard,
+        .pointer = wl_pointer,
+        .touch = wl_touch,
+
+        // Event-Handling
         .ev_thread = undefined,
     };
 
@@ -196,14 +260,45 @@ pub fn init(arena: *Arena) *Client {
 }
 
 pub fn deinit(client: *Client) void {
+    // At exit:
+    // - Close connection
+    // - Free client arena
+    defer {
+        client.registry.deinit();
+        client.connection.close();
+        client.socket = -1;
+        client.arena.release();
+    }
+
     client.ev_thread.join();
+    // Release input devices
+    if (client.socket != -1) {
+        const writer = client.connection.writer();
+        client.keyboard.release(writer, .{}) catch |err| {
+            log.err("wl_keyboard release failed with err :: {s}", .{@errorName(err)});
+        };
+        client.pointer.release(writer, .{}) catch |err| {
+            log.err("wl_pointer release failed with err :: {s}", .{@errorName(err)});
+        };
+        client.touch.release(writer, .{}) catch |err| {
+            log.err("wl_touch release failed with err :: {s}", .{@errorName(err)});
+        };
+    }
+
+    // Destroy all surfaces
+    {
+        for (client.surfaces.items) |surface| {
+            surface.destroy();
+        }
+        client.surfaces.deinit();
+    }
 }
 
 fn ev_handle_thread(client: *Client) void {
-    while (client.socket != -1) {
+    while (!client.should_exit and client.socket != -1) {
         client.handle_event() catch |err| {
             log.err("Wayland Event Thread Hit Error :: {s}", .{@errorName(err)});
-            client.socket = -1;
+            client.should_exit = true;
         };
     }
 }
@@ -220,7 +315,7 @@ fn handle_event(client: *Client) !void {
         const ev_interface = interface.registry.get(ev.header.id) orelse return;
         switch (ev_interface) {
             .wl_display => {
-                const action_opt: ?wl.Display.Event = wl.Display.Event.parse(ev.header.op, ev.data) catch null;
+                const action_opt = wl.Display.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
                         .delete_id => |del_id| {
@@ -233,20 +328,76 @@ fn handle_event(client: *Client) !void {
                                 err.message,
                             });
                         },
-                    };
+                    }
+                else
+                    log.warn("Failed to parse event for wl_display", .{});
+            },
+            .wl_seat => {
+                const action_opt = wl.Seat.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .name => |name| {
+                            log.info("wl_seat name :: {s}", .{name.name});
+                        },
+                        .capabilities => |capabilities| {
+                            log.info("wl_seat capabilities :: pointer : {s}, keyboard : {s}, touch : {s}", .{
+                                if (capabilities.capabilities.pointer) "true" else "false",
+                                if (capabilities.capabilities.keyboard) "true" else "false",
+                                if (capabilities.capabilities.touch) "true" else "false",
+                            });
+                        },
+                    }
+                else
+                    log.warn("Failed to parse event for wl_seat", .{});
+            },
+            .wl_keyboard => {
+                const kb_ev_opt = wl.Keyboard.Event.parse(ev.header.op, ev.data) catch null;
+                if (kb_ev_opt) |kb_ev|
+                    switch (kb_ev) {
+                        .keymap => |keymap| {
+                            const format = keymap.format;
+
+                            if (event_iterator.next_fd()) |fd| {
+                                const keymap_data = std.posix.mmap(
+                                    null,
+                                    keymap.size,
+                                    std.posix.PROT.READ,
+                                    .{ .TYPE = .PRIVATE },
+                                    fd,
+                                    0,
+                                ) catch |err| {
+                                    log.err("zwp_linux_dmabuf_feedback_v1 :: Failed to map format table :: {s}", .{@errorName(err)});
+                                    return err;
+                                };
+                                defer std.posix.munmap(keymap_data);
+                                log.debug("wl_keyboard :: Received keymap of size {d} for format: {s}", .{ keymap.size, @tagName(format) });
+                            }
+                        },
+                        else => {
+                            log.info("Unused wl_keyboard event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
+                                ev.header.id,
+                                ev.header.op,
+                                ev.header.msg_size,
+                            });
+                        },
+                    }
+                else
+                    log.warn("Failed to parse event for wl_keyboard", .{});
             },
             .wl_surface => {
-                const action_opt: ?wl.Surface.Event = wl.Surface.Event.parse(ev.header.op, ev.data) catch null;
+                const action_opt = wl.Surface.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
                         .enter => log.info("wl_surface :: gained focus", .{}),
                         .leave => log.info("wl_surface :: lost focus", .{}),
                         .preferred_buffer_scale => log.info("wl_surface :: received preferred buffer scale", .{}),
                         .preferred_buffer_transform => log.info("wl_surface :: received preferred buffer transform", .{}),
-                    };
+                    }
+                else
+                    log.warn("Failed to parse event for wl_surface", .{});
             },
             .xdg_wm_base => {
-                const action_opt: ?xdg.WmBase.Event = xdg.WmBase.Event.parse(ev.header.op, ev.data) catch null;
+                const action_opt = xdg.WmBase.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
                         .ping => |ping| {
@@ -255,10 +406,12 @@ fn handle_event(client: *Client) !void {
                             }) catch |err| return err;
                             log.info("ponged ping from xdg_wm_base :: serial = {d}", .{ping.serial});
                         },
-                    };
+                    }
+                else
+                    log.warn("Failed to parse event for xdg_wm_base", .{});
             },
             .xdg_surface => {
-                const action_opt: ?xdg.Surface.Event = xdg.Surface.Event.parse(ev.header.op, ev.data) catch null;
+                const action_opt = xdg.Surface.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
                         .configure => |configure| {
@@ -271,10 +424,12 @@ fn handle_event(client: *Client) !void {
                                 focused_surface.flags.acked = true;
                             }
                         },
-                    };
+                    }
+                else
+                    log.warn("Failed to parse event for xdg_surface", .{});
             },
             .xdg_toplevel => {
-                const action_opt: ?xdg.Toplevel.Event = xdg.Toplevel.Event.parse(ev.header.op, ev.data) catch null;
+                const action_opt = xdg.Toplevel.Event.parse(ev.header.op, ev.data) catch null;
                 const focused_surface = client.surfaces.items[client.focused_surface];
                 if (action_opt) |action|
                     switch (action) {
@@ -291,18 +446,24 @@ fn handle_event(client: *Client) !void {
                                 focused_surface.dims.y = configure.height;
                             }
                         },
-                        .close => { //  Empty struct, nothing to capture
+                        .close => {
                             log.info("Toplevel Received Close Signal", .{});
-                            focused_surface.toplevel.destroy(writer, .{}) catch |err| return err;
-                            focused_surface.xdg_surface.destroy(writer, .{}) catch |err| return err;
-                            focused_surface.wl_surface.destroy(writer, .{}) catch |err| return err;
+                            focused_surface.destroy();
                             _ = client.surfaces.orderedRemove(client.focused_surface);
                             if (client.surfaces.items.len == 0) {
-                                client.socket = -1;
+                                client.should_exit = true;
                             }
                         },
-                        else => {},
-                    };
+                        else => {
+                            log.debug("xdg_toplevel :: Unused Event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
+                                ev.header.id,
+                                ev.header.op,
+                                ev.header.msg_size,
+                            });
+                        },
+                    }
+                else
+                    log.warn("Failed to parse event for xdg_toplevel", .{});
             },
             .zxdg_toplevel_decoration_v1 => {
                 const action_opt = xdgd.ToplevelDecorationV1.Event.parse(ev.header.op, ev.data) catch null;
@@ -312,32 +473,78 @@ fn handle_event(client: *Client) !void {
                         .configure => |configure| {
                             log.info("Toplevel decoration mode set :: {s}", .{@tagName(configure.mode)});
                         },
-                    };
+                    }
+                else
+                    log.warn("Failed to parse event for zxdg_toplevel_decoration_v1", .{});
             },
             .zwp_linux_dmabuf_feedback_v1 => {
-                const feedback = dmab.LinuxDmabufFeedbackV1.Event.parse(ev.header.op, ev.data) catch |err| return err;
+                const feedback_opt = dmab.LinuxDmabufFeedbackV1.Event.parse(ev.header.op, ev.data) catch null;
 
-                switch (feedback) {
-                    .format_table => |table| {
-                        if (event_iterator.next_fd()) |fd| {
-                            const table_data = std.posix.mmap(
-                                null,
-                                table.size,
-                                std.posix.PROT.READ,
-                                .{ .TYPE = .PRIVATE },
-                                fd,
-                                0,
-                            ) catch |err| {
-                                log.err("DMABuf Feedback :: Failed to Map Supported Formats Table :: {s}", .{@errorName(err)});
-                                return err;
-                            };
-                            defer std.posix.munmap(table_data);
+                if (feedback_opt) |feedback|
+                    switch (feedback) {
+                        .done => {
+                            log.info("zwp_linux_dmabuf_feedback_v1 :: All feedback received", .{});
+                        },
+                        .format_table => |table| {
+                            if (event_iterator.next_fd()) |fd| {
+                                const entry_count = table.size / 16;
+                                log.info("zwp_linux_dmabuf_feedback_v1 :: Received format table with {d} entries", .{entry_count});
 
-                            client.gfx_format = .abgr8888;
-                        }
-                    },
-                    else => {},
-                }
+                                const table_data = std.posix.mmap(
+                                    null,
+                                    table.size,
+                                    std.posix.PROT.READ,
+                                    .{ .TYPE = .PRIVATE },
+                                    fd,
+                                    0,
+                                ) catch |err| {
+                                    log.err("zwp_linux_dmabuf_feedback_v1 :: Failed to map format table :: {s}", .{@errorName(err)});
+                                    return err;
+                                };
+                                defer std.posix.munmap(table_data);
+                                client.format_mod_pairs = client.arena.push(FormatModPair, entry_count);
+
+                                var cur_idx: u16 = 0;
+                                var iter = std.mem.window(u8, table_data, 16, 16);
+                                while (iter.next()) |pair| : (cur_idx += 1) {
+                                    const format: Drm.Format = @enumFromInt(std.mem.bytesToValue(u32, pair[0..4]));
+                                    const modifier: Drm.Modifier = @enumFromInt(std.mem.bytesToValue(u64, pair[8..]));
+                                    client.format_mod_pairs[cur_idx] = .{ .format = format, .modifier = modifier };
+                                }
+
+                                client.gfx_format = .abgr8888;
+                            }
+                        },
+                        .main_device => |main_device| {
+                            log.info("zwp_linux_dmabuf_feedback_v1 :: Received main_device: {s}", .{main_device.device});
+                        },
+                        .tranche_done => {
+                            log.info("zwp_linux_dmabuf_feedback_v1 :: tranche_done event received", .{});
+                        },
+                        .tranche_target_device => |target_device| {
+                            log.info("zwp_linux_dmabuf_feedback_v1 :: Received tranche_target_device: {s}", .{target_device.device});
+                        },
+                        .tranche_formats => |tranche_formats| {
+                            const entry_count = tranche_formats.indices.len / 2; // 16-bit entries in array of 8-bit values
+                            log.info("zwp_linux_dmabuf_feedback_v1 :: Received supported format+modifier table indices with {d} entries", .{entry_count});
+
+                            client.supported_format_mod_pairs = client.arena.push(FormatModPair, entry_count);
+
+                            var cur_idx: u16 = 0;
+                            var iter = std.mem.window(u8, tranche_formats.indices, 2, 2);
+                            while (iter.next()) |entry| : (cur_idx += 1) {
+                                const idx = std.mem.bytesToValue(u16, entry[0..]);
+                                client.supported_format_mod_pairs[cur_idx] = client.format_mod_pairs[idx];
+                            }
+                        },
+                        .tranche_flags => |tranche_flags| {
+                            log.info("zwp_linux_dmabuf_feedback_v1 :: Received tranche_flags: scanout = {s}", .{
+                                if (tranche_flags.flags.scanout) "true" else "false",
+                            });
+                        },
+                    }
+                else
+                    log.warn("Failed to parse event for zwp_linux_dmabuf_feedback_v1", .{});
             },
             else => {
                 log.warn("Unused event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
@@ -350,13 +557,10 @@ fn handle_event(client: *Client) !void {
     }
 }
 
-pub fn log_display_err(err: wl.Display.Event.Error) void {
-    log.err("wl_display::error => object id: {d}, code: {d}, msg: {s}", .{
-        err.object_id,
-        err.code,
-        err.message,
-    });
-}
+const FormatModPair = struct {
+    format: Drm.Format,
+    modifier: Drm.Modifier,
+};
 
 const Event = struct {
     header: msg.Header,
@@ -389,7 +593,6 @@ const Event = struct {
                 /// Any incomplete data is moved to the front, and all other bytes are zeroed out
                 pub fn shift(sb: *ShiftBuf) void {
                     std.mem.copyForwards(u8, &sb.data, sb.data[sb.start..]);
-                    // @memset(sb.data[sb.start % buf_size ..], 0); // Just in case
                     sb.end -= sb.start;
                     sb.start = 0;
                 }
@@ -504,57 +707,57 @@ const Event = struct {
 
                 return it.fd_queue.data[it.fd_queue.read];
             }
+
+            const cmsg = msg.cmsg;
+            const fd_cmsg = cmsg(std.posix.fd_t);
+            const SCM_RIGHTS = 0x01;
+            fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?std.posix.fd_t {
+                var cmsg_buf: [fd_cmsg.Size * 12]u8 = undefined;
+
+                var iov = [_]std.posix.iovec{
+                    .{
+                        .base = buf.ptr,
+                        .len = buf.len,
+                    },
+                };
+
+                var message: std.posix.msghdr = .{
+                    .name = null,
+                    .namelen = 0,
+                    .iov = &iov,
+                    .iovlen = 1,
+                    .control = &cmsg_buf,
+                    .controllen = cmsg_buf.len,
+                    .flags = 0,
+                };
+
+                const rc = std.os.linux.recvmsg(socket, &message, std.os.linux.MSG.PEEK | std.os.linux.MSG.DONTWAIT);
+
+                const res = res: {
+                    if (@as(isize, @bitCast(rc)) < 0) {
+                        const err = std.posix.errno(rc);
+                        log.err("recvmsg failed with err: {s}", .{@tagName(err)});
+                        break :res null;
+                    } else {
+                        const cmsg_size = fd_cmsg.Size;
+                        var offset: usize = 0;
+                        while (offset + cmsg_size <= message.controllen) {
+                            const ctrl_buf: [*]u8 = @ptrCast(message.control.?);
+                            const ctrl_msg: *align(1) fd_cmsg = @ptrCast(@alignCast(ctrl_buf[offset..][0..fd_cmsg.Size]));
+
+                            if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == SCM_RIGHTS)
+                                break :res ctrl_msg.data;
+                        }
+                        offset += 1;
+                    }
+                    break :res null;
+                };
+
+                return res;
+            }
         };
     }
 };
-
-const cmsg = msg.cmsg;
-const fd_cmsg = cmsg(std.posix.fd_t);
-const SCM_RIGHTS = 0x01;
-fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?std.posix.fd_t {
-    var cmsg_buf: [fd_cmsg.Size * 12]u8 = undefined;
-
-    var iov = [_]std.posix.iovec{
-        .{
-            .base = buf.ptr,
-            .len = buf.len,
-        },
-    };
-
-    var message: std.posix.msghdr = .{
-        .name = null,
-        .namelen = 0,
-        .iov = &iov,
-        .iovlen = 1,
-        .control = &cmsg_buf,
-        .controllen = cmsg_buf.len,
-        .flags = 0,
-    };
-
-    const rc = std.os.linux.recvmsg(socket, &message, std.os.linux.MSG.PEEK | std.os.linux.MSG.DONTWAIT);
-
-    const res = res: {
-        if (@as(isize, @bitCast(rc)) < 0) {
-            const err = std.posix.errno(rc);
-            log.err("recvmsg failed with err: {s}", .{@tagName(err)});
-            break :res null;
-        } else {
-            const cmsg_size = fd_cmsg.Size;
-            var offset: usize = 0;
-            while (offset + cmsg_size <= message.controllen) {
-                const ctrl_buf: [*]u8 = @ptrCast(message.control.?);
-                const ctrl_msg: *align(1) fd_cmsg = @ptrCast(@alignCast(ctrl_buf[offset..][0..fd_cmsg.Size]));
-
-                if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == SCM_RIGHTS)
-                    break :res ctrl_msg.data;
-            }
-            offset += 1;
-        }
-        break :res null;
-    };
-
-    return res;
-}
 
 const Vec2I32 = struct {
     x: i32,
@@ -680,6 +883,26 @@ pub const Surface = struct {
             .fps_target = params.fps_target orelse 60,
         };
     }
+    pub fn destroy(surface: *Surface) void {
+        const writer = surface.client.connection.writer();
+        for (surface.buffers) |buf| {
+            buf.destroy(writer, .{}) catch |err| {
+                log.err("Surface :: deinit() :: failed to send wl_buffer.destroy() message with err :: {s}", .{@errorName(err)});
+            };
+        }
+        surface.decorations.destroy(writer, .{}) catch |err| {
+            log.err("Surface :: deinit() :: failed to send xdg_decorations.destroy() message with err :: {s}", .{@errorName(err)});
+        };
+        surface.toplevel.destroy(writer, .{}) catch |err| {
+            log.err("Surface :: deinit() :: failed to send xdg_toplevel.destroy() message with err :: {s}", .{@errorName(err)});
+        };
+        surface.xdg_surface.destroy(writer, .{}) catch |err| {
+            log.err("Surface :: deinit() :: failed to send xdg_surface.destroy() message with err :: {s}", .{@errorName(err)});
+        };
+        surface.wl_surface.destroy(writer, .{}) catch |err| {
+            log.err("Surface :: deinit() :: failed to send wl_surface.destroy() message with err :: {s}", .{@errorName(err)});
+        };
+    }
 
     pub fn init_buffers(
         surface: *Surface,
@@ -691,7 +914,7 @@ pub const Surface = struct {
         }
 
         surface.wl_surface.attach(surface.client.connection.writer(), .{
-            .buffer = surface.buffers[0].id,
+            .buffer = surface.buffers[surface.cur_buf].id,
             .x = 0,
             .y = 0,
         }) catch return error.FailedToAttachBuffer;
@@ -712,10 +935,7 @@ pub const Surface = struct {
         };
 
         const wl_buffer = if (dmabuf_params_opt) |dmabuf_params| buffer: {
-            defer dmabuf_params.destroy(writer, .{}) catch |err| {
-                log.err("Failed to destroy linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
-            };
-
+            log.debug("Creating wl_buffer :: fd = {d}", .{fd});
             dmabuf_params.add(writer, .{
                 .fd = fd,
                 .plane_idx = 0,
@@ -737,6 +957,10 @@ pub const Surface = struct {
             }) catch |err| {
                 log.err("Failed to create wl_buffer due to err :: {s}", .{@errorName(err)});
                 break :buffer null;
+            };
+
+            dmabuf_params.destroy(writer, .{}) catch |err| {
+                log.err("Failed to destroy linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
             };
 
             break :buffer wl_buffer;

@@ -6,7 +6,7 @@ const Drm = @import("Drm.zig");
 const GraphicsContext = @import("GraphicsContext.zig");
 const Arena = @import("Arena.zig");
 
-const WlClient = @import("wl-client.zig");
+const Client = @import("wl-client.zig");
 const protocols = @import("generated/protocols.zig");
 const dmab = protocols.linux_dmabuf_v1;
 
@@ -20,7 +20,7 @@ pub fn main() !void {
 
         // Creating application state
         var state: State = state: {
-            const client: *WlClient = .init(arena);
+            const client: *Client = .init(.init(.default));
             break :state .{
                 .client = client,
                 .vk_format = undefined,
@@ -29,7 +29,7 @@ pub fn main() !void {
         };
         defer state.deinit();
 
-        var focused_surface: *WlClient.Surface = state.client.surfaces.items[state.client.focused_surface];
+        var focused_surface: *Client.Surface = state.client.surfaces.items[state.client.focused_surface];
 
         while (!focused_surface.flags.acked) {}
         _ = state.client.dmabuf.get_surface_feedback(state.client.connection.writer(), .{
@@ -71,7 +71,7 @@ pub fn main() !void {
             const frag_spv: [*]const u32 = @ptrCast(@alignCast(frag_buf[0..frag_bytes]));
 
             const screen_width: u32 = @intCast(focused_surface.dims.x);
-            const screen_height: u32 = @intCast(focused_surface.dims.x);
+            const screen_height: u32 = @intCast(focused_surface.dims.y);
 
             var graphics_context = GraphicsContext.init(
                 arena,
@@ -158,17 +158,19 @@ pub fn main() !void {
 
         try focused_surface.init_buffers(state.graphics_context.mem_fds);
 
-        var red_val: f32 = 0.0;
+        var red_val: f32 = 1.0;
         var blu_val: f32 = 0.0;
+        var gre_val: f32 = 1.0;
         var step: f32 = 0.01;
         var cur_frame_idx: usize = 0;
         var prev_time: i64 = std.time.milliTimestamp();
-        while (state.client.socket != -1) : (cur_frame_idx = (cur_frame_idx + 1) % state.graphics_context.images.len) {
+        while (!state.client.should_exit) : (cur_frame_idx = (cur_frame_idx + 1) % state.graphics_context.images.len) {
             const time = std.time.milliTimestamp();
 
             if (time - prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
-                red_val += step;
+                red_val -= step;
                 blu_val += step;
+                gre_val -= step;
                 if (red_val >= 1.0 or red_val <= 0.0) {
                     step = -step;
                 }
@@ -184,7 +186,7 @@ pub fn main() !void {
                 const clear_value = [_]vk.ClearValue{
                     .{
                         .color = .{
-                            .float_32 = [_]f32{ red_val, 0.3, blu_val, 1.0 },
+                            .float_32 = [_]f32{ red_val, gre_val, blu_val, 1.0 },
                         },
                     },
                 };
@@ -228,11 +230,6 @@ pub fn main() !void {
                         .height = focused_surface.dims.y,
                     }) catch |err| break :exit err;
 
-                    focused_surface.wl_surface.attach(state.client.connection.writer(), .{
-                        .buffer = focused_surface.buffers[0].id,
-                        .x = 0,
-                        .y = 0,
-                    }) catch |err| break :exit err;
                     focused_surface.wl_surface.commit(state.client.connection.writer(), .{}) catch |err| break :exit err;
                 }
             } else {
@@ -250,7 +247,7 @@ pub fn main() !void {
 }
 
 const State = struct {
-    client: *WlClient,
+    client: *Client,
     vk_format: vk.Format,
     graphics_context: GraphicsContext,
     fps_target: i32 = 60,
@@ -265,5 +262,5 @@ test "Arena" {
     _ = Arena;
 }
 test "Wayland Client Tests" {
-    _ = WlClient;
+    _ = Client;
 }

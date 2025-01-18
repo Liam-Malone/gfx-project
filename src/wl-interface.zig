@@ -82,6 +82,10 @@ pub const Registry = struct {
             .registry = .{ .id = 2 },
         };
     }
+    pub fn deinit(self: *Registry) void {
+        log.warn("Interface Registry deinit not yet implemented", .{});
+        self.elems.deinit();
+    }
 
     pub fn bind(self: *Registry, comptime T: type, writer: anytype, params: wl.Registry.Event.Global) !T {
         const idx = if (self.free_list.next()) |freed_id|
