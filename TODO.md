@@ -1,10 +1,9 @@
-# Wayland Client Reworking
+# Wayland Input Handling
 
-- [x] Output all generated code into a single `protocols.zig`
-    - this should eliminate namespacing and inter-protocol type resolution issues
-- [x] Move protocol interaction into `wl-client` (99% done)
-- [x] Clean up `main.zig`
-- [x] Fix compile errors
-- [x] Move `wl-msg.zig` back into main module?
-- [x] Revisit build script
-- [-] Keyboard & Mouse input
+- [/] Keyboard & Mouse input events
+    - [x] Basic logging of key inputs (press/release)
+    - [/] (xkb?) Keymapping
+    - [ ] Basic xkb_keymap parser
+    - [ ] Map xkb_keys to keys program cares about
+    - [ ] Basic logging of mouse inputs (press/release)
+- [ ] 'System Event' Queue
