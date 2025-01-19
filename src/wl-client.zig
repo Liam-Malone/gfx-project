@@ -373,6 +373,9 @@ fn handle_event(client: *Client) !void {
                                 log.debug("wl_keyboard :: Received keymap of size {d} for format: {s}", .{ keymap.size, @tagName(format) });
                             }
                         },
+                        .key => |key| {
+                            log.info("wl_keyboard :: Received key event :: key={d}, serial={d}, time={d}, state={s}", .{ key.key, key.serial, key.time, @tagName(key.state) });
+                        },
                         else => {
                             log.info("Unused wl_keyboard event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
                                 ev.header.id,
