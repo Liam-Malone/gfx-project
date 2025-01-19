@@ -4,7 +4,7 @@
     - this should eliminate namespacing and inter-protocol type resolution issues
 - [x] Move protocol interaction into `wl-client` (99% done)
 - [x] Clean up `main.zig`
-- [ ] Fix compile errors
-- [ ] Move `wl-msg.zig` back into main module?
-- [ ] Revisit build script
-- [ ] Keyboard & Mouse input
+- [x] Fix compile errors
+- [x] Move `wl-msg.zig` back into main module?
+- [x] Revisit build script
+- [-] Keyboard & Mouse input
