@@ -17,7 +17,7 @@ In the process of attaining a basic window, I realized it would be much easier i
 
 - [x] Basic Window
 - [x] Vulkan Context
-- [ ] Input Event Handling
+- [-] Input Event Handling
 - [ ] Hello Triangle
 - [ ] Texture/Image Rendering
 - [ ] 3D Graphics Rendering
@@ -25,9 +25,9 @@ In the process of attaining a basic window, I realized it would be much easier i
 
 #### Next Steps
 
-- [ ] Re-structure wayland interface
-- [ ] Move wayland-specific client handling to it's own file
-- [ ] Keyboard/Mouse input events
+- [x] Re-structure wayland interface
+- [x] Move wayland-specific client handling to it's own file
+- [-] Keyboard/Mouse input events
 - [ ] Proper vulkan swapchain creation pipeline
 - [ ] Window resizing
 
