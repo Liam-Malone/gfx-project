@@ -44,10 +44,15 @@ pub const nil: Client = .{
     .format_mod_pairs = undefined,
     .supported_format_mod_pairs = undefined,
 
-    // Input devices
+    // Input
+    // Devices
     .keyboard = undefined, // Keyboard/OtherDevice input
     .pointer = undefined, // Mouse/Trackpad input
     .touch = undefined, // Touchscreen input
+
+    // State
+    .keymap = undefined,
+    .exit_key = undefined,
 
     .should_exit = false,
 
@@ -80,10 +85,14 @@ gfx_format: Drm.Format,
 format_mod_pairs: []FormatModPair,
 supported_format_mod_pairs: []FormatModPair,
 
-// Input devices
+// Input
+// Devices
 keyboard: wl.Keyboard, // Keyboard/OtherDevice input
 pointer: wl.Pointer, // Mouse/Trackpad input
 touch: wl.Touch, // Touchscreen input
+// State
+keymap: []Keyboard.State,
+exit_key: Keyboard.Key,
 
 should_exit: bool = false,
 // Wayland event handling
@@ -100,10 +109,9 @@ pub fn init(arena: *Arena) *Client {
         const sock_path = std.mem.join(alloc, "/", &[_][]const u8{ xdg_runtime_dir, wayland_display }) catch return @constCast(&Client.nil);
         break :open_connection std.net.connectUnixSocket(sock_path) catch return @constCast(&Client.nil);
     };
-
-    const display: wl.Display = .{ .id = 1 };
     const connection_writer = connection.writer();
 
+    const display: wl.Display = .{ .id = 1 };
     interface.registry = interface.Registry.init(alloc, display) catch return @constCast(&Client.nil);
     _ = display.get_registry(connection_writer, .{}) catch return @constCast(&Client.nil);
 
@@ -228,6 +236,9 @@ pub fn init(arena: *Arena) *Client {
         .pointer = wl_pointer,
         .touch = wl_touch,
 
+        .keymap = arena.push(Keyboard.State, 126),
+        .exit_key = .q,
+
         // Event-Handling
         .ev_thread = undefined,
     };
@@ -308,7 +319,7 @@ fn handle_event(client: *Client) !void {
 
     const writer = client.connection.writer();
     const ev_opt = try event_iterator.next() orelse blk: {
-        std.time.sleep(1_000_000);
+        std.time.sleep(1_000);
         break :blk null;
     };
     if (ev_opt) |ev| {
@@ -374,10 +385,19 @@ fn handle_event(client: *Client) !void {
                             }
                         },
                         .key => |key| {
-                            log.info("wl_keyboard :: Received key event :: key={d}, serial={d}, time={d}, state={s}", .{ key.key, key.serial, key.time, @tagName(key.state) });
+                            const key_name = std.meta.intToEnum(Keyboard.Key, key.key) catch blk: {
+                                log.err("Received unmapped key event ({d}), assigning nil", .{key.key});
+                                break :blk .nil;
+                            };
+                            const key_state = (key.state);
+                            log.debug("wl_keyboard :: Received key event :: key = (name = {s}, keycode={d}), serial={d}, time={d}, state={s}", .{ @tagName(key_name), key.key, key.serial, key.time, @tagName(key.state) });
+                            if (key_name == .q and key_state == .pressed)
+                                client.should_exit = true;
+                            if (client.keymap[key.key] != key_state)
+                                client.keymap[key.key] = key_state;
                         },
                         else => {
-                            log.info("Unused wl_keyboard event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
+                            log.debug("Unused wl_keyboard event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
                                 ev.header.id,
                                 ev.header.op,
                                 ev.header.msg_size,
@@ -391,10 +411,10 @@ fn handle_event(client: *Client) !void {
                 const action_opt = wl.Surface.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
-                        .enter => log.info("wl_surface :: gained focus", .{}),
-                        .leave => log.info("wl_surface :: lost focus", .{}),
-                        .preferred_buffer_scale => log.info("wl_surface :: received preferred buffer scale", .{}),
-                        .preferred_buffer_transform => log.info("wl_surface :: received preferred buffer transform", .{}),
+                        .enter => log.debug("wl_surface :: gained focus", .{}),
+                        .leave => log.debug("wl_surface :: lost focus", .{}),
+                        .preferred_buffer_scale => log.debug("wl_surface :: received preferred buffer scale", .{}),
+                        .preferred_buffer_transform => log.debug("wl_surface :: received preferred buffer transform", .{}),
                     }
                 else
                     log.warn("Failed to parse event for wl_surface", .{});
@@ -407,7 +427,7 @@ fn handle_event(client: *Client) !void {
                             client.wm_base.pong(writer, .{
                                 .serial = ping.serial,
                             }) catch |err| return err;
-                            log.info("ponged ping from xdg_wm_base :: serial = {d}", .{ping.serial});
+                            log.debug("ponged ping from xdg_wm_base :: serial = {d}", .{ping.serial});
                         },
                     }
                 else
@@ -423,7 +443,7 @@ fn handle_event(client: *Client) !void {
                                 .serial = configure.serial,
                             }) catch |err| return err;
                             if (!focused_surface.flags.acked) {
-                                log.info("Acked configure for xdg_surface", .{});
+                                log.debug("Acked configure for xdg_surface", .{});
                                 focused_surface.flags.acked = true;
                             }
                         },
@@ -486,12 +506,12 @@ fn handle_event(client: *Client) !void {
                 if (feedback_opt) |feedback|
                     switch (feedback) {
                         .done => {
-                            log.info("zwp_linux_dmabuf_feedback_v1 :: All feedback received", .{});
+                            log.debug("zwp_linux_dmabuf_feedback_v1 :: All feedback received", .{});
                         },
                         .format_table => |table| {
                             if (event_iterator.next_fd()) |fd| {
                                 const entry_count = table.size / 16;
-                                log.info("zwp_linux_dmabuf_feedback_v1 :: Received format table with {d} entries", .{entry_count});
+                                log.debug("zwp_linux_dmabuf_feedback_v1 :: Received format table with {d} entries", .{entry_count});
 
                                 const table_data = std.posix.mmap(
                                     null,
@@ -519,17 +539,17 @@ fn handle_event(client: *Client) !void {
                             }
                         },
                         .main_device => |main_device| {
-                            log.info("zwp_linux_dmabuf_feedback_v1 :: Received main_device: {s}", .{main_device.device});
+                            log.debug("zwp_linux_dmabuf_feedback_v1 :: Received main_device: {s}", .{main_device.device});
                         },
                         .tranche_done => {
-                            log.info("zwp_linux_dmabuf_feedback_v1 :: tranche_done event received", .{});
+                            log.debug("zwp_linux_dmabuf_feedback_v1 :: tranche_done event received", .{});
                         },
                         .tranche_target_device => |target_device| {
-                            log.info("zwp_linux_dmabuf_feedback_v1 :: Received tranche_target_device: {s}", .{target_device.device});
+                            log.debug("zwp_linux_dmabuf_feedback_v1 :: Received tranche_target_device: {s}", .{target_device.device});
                         },
                         .tranche_formats => |tranche_formats| {
                             const entry_count = tranche_formats.indices.len / 2; // 16-bit entries in array of 8-bit values
-                            log.info("zwp_linux_dmabuf_feedback_v1 :: Received supported format+modifier table indices with {d} entries", .{entry_count});
+                            log.debug("zwp_linux_dmabuf_feedback_v1 :: Received supported format+modifier table indices with {d} entries", .{entry_count});
 
                             client.supported_format_mod_pairs = client.arena.push(FormatModPair, entry_count);
 
@@ -541,7 +561,7 @@ fn handle_event(client: *Client) !void {
                             }
                         },
                         .tranche_flags => |tranche_flags| {
-                            log.info("zwp_linux_dmabuf_feedback_v1 :: Received tranche_flags: scanout = {s}", .{
+                            log.debug("zwp_linux_dmabuf_feedback_v1 :: Received tranche_flags: scanout = {s}", .{
                                 if (tranche_flags.flags.scanout) "true" else "false",
                             });
                         },
@@ -559,6 +579,16 @@ fn handle_event(client: *Client) !void {
         }
     }
 }
+
+pub const Keyboard = struct {
+    pub const Key = enum(u32) {
+        nil = 0,
+        q = 16,
+        super = 125,
+    };
+
+    pub const State = wl.Keyboard.KeyState;
+};
 
 const FormatModPair = struct {
     format: Drm.Format,
