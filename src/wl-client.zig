@@ -4,6 +4,8 @@ const Drm = @import("Drm.zig");
 const Arena = @import("Arena.zig");
 const interface = @import("wl-interface.zig");
 const GraphicsContext = @import("GraphicsContext.zig");
+const input = @import("input.zig");
+const xkb = @import("xkb.zig");
 
 const BufCount = GraphicsContext.BufferCount;
 
@@ -22,6 +24,7 @@ const Client = @This();
 pub const nil: Client = .{
     // Client arena
     .arena = undefined,
+    .keymap_arena = undefined,
 
     // Base Wayland Connection
     .socket = -1,
@@ -52,6 +55,7 @@ pub const nil: Client = .{
 
     // State
     .keymap = undefined,
+    .xkb_keymap = null,
     .exit_key = undefined,
 
     .should_exit = false,
@@ -62,6 +66,7 @@ pub const nil: Client = .{
 
 // Arena for longer-lived allocations
 arena: *Arena,
+keymap_arena: *Arena, // Temporary until I implement a free list in my Arena implementation
 
 // Base wayland connection
 socket: std.posix.fd_t,
@@ -91,8 +96,9 @@ keyboard: wl.Keyboard, // Keyboard/OtherDevice input
 pointer: wl.Pointer, // Mouse/Trackpad input
 touch: wl.Touch, // Touchscreen input
 // State
-keymap: []Keyboard.State,
-exit_key: Keyboard.Key,
+keymap: []input.Key.State,
+xkb_keymap: ?xkb.Keymap,
+exit_key: input.Key,
 
 should_exit: bool = false,
 // Wayland event handling
@@ -208,6 +214,7 @@ pub fn init(arena: *Arena) *Client {
     client_ptr.* = .{
         // Arena
         .arena = arena,
+        .keymap_arena = .init(.default),
 
         // Base Wayland Connection
         .socket = connection.handle,
@@ -236,7 +243,8 @@ pub fn init(arena: *Arena) *Client {
         .pointer = wl_pointer,
         .touch = wl_touch,
 
-        .keymap = arena.push(Keyboard.State, 126),
+        .keymap = arena.push(input.Key.State, input.Key.Count),
+        .xkb_keymap = null,
         .exit_key = .q,
 
         // Event-Handling
@@ -368,6 +376,7 @@ fn handle_event(client: *Client) !void {
                         .keymap => |keymap| {
                             const format = keymap.format;
 
+                            client.keymap_arena.clear();
                             if (event_iterator.next_fd()) |fd| {
                                 const keymap_data = std.posix.mmap(
                                     null,
@@ -381,20 +390,22 @@ fn handle_event(client: *Client) !void {
                                     return err;
                                 };
                                 defer std.posix.munmap(keymap_data);
+
+                                const map_data = try client.keymap_arena.allocator().dupe(u8, keymap_data);
+                                client.xkb_keymap = try .init(client.keymap_arena, map_data);
                                 log.debug("wl_keyboard :: Received keymap of size {d} for format: {s}", .{ keymap.size, @tagName(format) });
                             }
                         },
                         .key => |key| {
-                            const key_name = std.meta.intToEnum(Keyboard.Key, key.key) catch blk: {
-                                log.err("Received unmapped key event ({d}), assigning nil", .{key.key});
-                                break :blk .nil;
-                            };
-                            const key_state = (key.state);
-                            log.debug("wl_keyboard :: Received key event :: key = (name = {s}, keycode={d}), serial={d}, time={d}, state={s}", .{ @tagName(key_name), key.key, key.serial, key.time, @tagName(key.state) });
-                            if (key_name == .q and key_state == .pressed)
+                            const key_name: input.Key = if (client.xkb_keymap) |keymap| blk: {
+                                break :blk keymap.get_key(key.key);
+                            } else .invalid;
+
+                            log.debug("Received key :: code={d}, keyname={s}", .{ key.key, @tagName(key_name) });
+                            if (key_name == .q and key.state == .pressed)
                                 client.should_exit = true;
-                            if (client.keymap[key.key] != key_state)
-                                client.keymap[key.key] = key_state;
+                            if (client.keymap[@intFromEnum(key_name)] != key.state)
+                                client.keymap[@intFromEnum(key_name)] = key.state;
                         },
                         else => {
                             log.debug("Unused wl_keyboard event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
@@ -579,16 +590,6 @@ fn handle_event(client: *Client) !void {
         }
     }
 }
-
-pub const Keyboard = struct {
-    pub const Key = enum(u32) {
-        nil = 0,
-        q = 16,
-        super = 125,
-    };
-
-    pub const State = wl.Keyboard.KeyState;
-};
 
 const FormatModPair = struct {
     format: Drm.Format,
