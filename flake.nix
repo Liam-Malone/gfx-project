@@ -17,6 +17,7 @@
           packages = with pkgs; [
             gdb
             lldb
+            libinput
             mesa
             shaderc
             valgrind
