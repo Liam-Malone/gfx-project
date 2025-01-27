@@ -1,8 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const protocols = @import("generated/protocols.zig");
-
-pub var key_states = [Key.Count]Key.State;
+const wl = @import("generated/protocols.zig").wayland;
 
 pub const Key = enum(u32) {
     invalid = 0,
@@ -471,24 +469,20 @@ pub const Key = enum(u32) {
     XF86KbdLcdMenu5,
 
     pub const Count = std.meta.fields(@This()).len;
-    pub const State = protocols.wayland.Keyboard.KeyState;
-    // pub const State = enum(u32) {
-    //     released = 0,
-    //     pressed = 1,
-    //     repeated = 2,
-    // };
+    pub const State = wl.Keyboard.KeyState;
 };
 
-pub const Mouse = struct {
-    pub const Button = enum(u32) {
-        left = 0,
-        right = 1,
-        middle = 2,
+/// Button number values taken from linux-kernel's `input-event-codes.h`
+pub const MouseButton = enum(u32) {
+    left = 0x110,
+    right = 0x111,
+    middle = 0x112,
+    side = 0x113,
+    extra = 0x114,
+    forward = 0x115,
+    back = 0x116,
+    task = 0x117,
 
-        pub const Count = std.meta.fields(@This()).len;
-        pub const State = enum(u32) {
-            released = 0,
-            pressed = 1,
-        };
-    };
+    pub const Count = std.meta.fields(@This()).len;
+    pub const State = wl.Pointer.ButtonState;
 };

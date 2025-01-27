@@ -6,9 +6,7 @@ pub const Arena = @This();
 
 pub const Flags = packed struct {
     no_chain: bool,
-    __padding_a: u31 = 0,
     large_pages: bool,
-    __padding_b: u31 = 0,
 
     pub const default: @This() = .{
         .no_chain = false,

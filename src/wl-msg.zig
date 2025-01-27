@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 
 const endian = builtin.cpu.arch.endian();
 const u32_size = @sizeOf(u32);
+const f32_size = @sizeOf(f32);
 const buf_align = u32_size;
 const str_len_size = buf_align;
 const SCM_RIGHTS = 0x01;
@@ -22,6 +23,17 @@ pub const Header = packed struct(u64) {
 
 const EventParser = struct {
     buf: []const u8,
+
+    pub fn get_f32(mp: *EventParser) !f32 {
+        if (mp.buf.len < f32_size) {
+            return error.InvalidLength;
+        }
+
+        const val = std.mem.bytesToValue(i32, mp.buf[0..f32_size]);
+        const float_val: f32 = @floatFromInt(val);
+        mp.consume(f32_size);
+        return (float_val / 256);
+    }
 
     pub fn get_u32(mp: *EventParser) !u32 {
         if (mp.buf.len < u32_size) {
@@ -82,6 +94,7 @@ pub fn parse_data(comptime T: type, data: []const u8) !T {
                 @field(event_result, field.name) = switch (field.type) {
                     u32 => try data_iter.get_u32(),
                     i32 => try data_iter.get_i32(),
+                    f32 => try data_iter.get_f32(),
                     [:0]const u8 => try data_iter.get_string(),
                     []const u8 => try data_iter.get_arr(),
                     else => parse: {
@@ -100,6 +113,7 @@ pub fn parse_data(comptime T: type, data: []const u8) !T {
             @field(event_result, field.name) = switch (field.type) {
                 u32 => try data_iter.get_u32(),
                 i32 => try data_iter.get_i32(),
+                f32 => try data_iter.get_f32(),
                 [:0]const u8 => try data_iter.get_string(),
                 []const u8 => try data_iter.get_arr(),
                 else => parse: {
@@ -130,6 +144,7 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
             i32, u32 => {
                 if (!std.mem.eql(u8, field.name, "fd")) msg_size += u32_size;
             },
+            f32 => msg_size += f32_size,
             [:0]const u8 => msg_size += str_write_len(@field(item, field.name)),
             []const u8 => msg_size += arr_write_len(@field(item, field.name)),
             else => @compileLog("Unsupported field {s} of type {}", .{ field.name, field.type }),
@@ -181,6 +196,7 @@ pub fn write(writer: anytype, comptime T: type, item: anytype, id: u32) !void {
             else => field_val,
         };
         switch (field_type) {
+            f32 => try write_float(writer, msg_val),
             u32 => try writer.writeInt(u32, msg_val, endian),
             i32 => try writer.writeInt(i32, msg_val, endian),
             [:0]const u8 => try write_str(writer, msg_val),
@@ -208,6 +224,11 @@ fn write_arr(writer: anytype, arr: []const u8) !void {
 
 fn write_str(writer: anytype, str: [:0]const u8) !void {
     try write_arr(writer, @ptrCast(str[0 .. str.len + 1]));
+}
+
+fn write_float(writer: anytype, float: f32) !void {
+    const val: i32 = @intFromFloat(float * 256);
+    try writer.writeInt(i32, val, endian);
 }
 
 fn write_control_msg(sock: std.posix.socket_t, msg_bytes: []const u8, fd: std.posix.fd_t) !void {

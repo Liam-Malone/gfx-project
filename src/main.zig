@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const vk = @import("vulkan");
 const Drm = @import("Drm.zig");
+const Event = @import("event.zig");
 
 const GraphicsContext = @import("GraphicsContext.zig");
 const Arena = @import("Arena.zig");
@@ -18,11 +19,14 @@ pub fn main() !void {
         var arena: *Arena = .init(.default);
         defer arena.release();
 
+        const ev_queue: *Event.Queue = arena.create(Event.Queue);
+        ev_queue.* = .init(arena.push(Event, 1024));
         // Creating application state
         var state: State = state: {
-            const client: *Client = .init(.init(.default));
+            const client: *Client = .init(.init(.default), ev_queue);
             break :state .{
                 .client = client,
+                .events = ev_queue,
                 .vk_format = undefined,
                 .graphics_context = undefined,
             };
@@ -168,6 +172,21 @@ pub fn main() !void {
             const time = std.time.milliTimestamp();
 
             if (time - prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
+                while (state.events.next()) |ev| {
+                    switch (ev.type) {
+                        .mouse_move => {
+                            log.debug("Mouse Move Event :: move :: {d:.2}x{d:.2}", .{ ev.mouse_pos_new.x, ev.mouse_pos_new.y });
+                        },
+                        .mouse_button => {
+                            log.debug("Mouse Button Event :: button :: {s}", .{@tagName(ev.mouse_button)});
+                        },
+                        .keyboard => {
+                            log.debug("Keyboard Event :: {s} key {s}", .{ @tagName(ev.key), @tagName(ev.key_state) });
+                        },
+                        else => {},
+                    }
+                }
+
                 red_val -= step;
                 blu_val += step;
                 gre_val -= step;
@@ -250,6 +269,7 @@ const State = struct {
     client: *Client,
     vk_format: vk.Format,
     graphics_context: GraphicsContext,
+    events: *Event.Queue,
     fps_target: i32 = 60,
 
     pub fn deinit(state: *State) void {

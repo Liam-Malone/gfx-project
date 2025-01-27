@@ -5,7 +5,9 @@ const Arena = @import("Arena.zig");
 const interface = @import("wl-interface.zig");
 const GraphicsContext = @import("GraphicsContext.zig");
 const input = @import("input.zig");
+const SysEvent = @import("event.zig");
 const xkb = @import("xkb.zig");
+const math = @import("math.zig");
 
 const BufCount = GraphicsContext.BufferCount;
 
@@ -62,6 +64,7 @@ pub const nil: Client = .{
 
     // Wayland event handling
     .ev_thread = undefined,
+    .sys_ev_queue = undefined,
 };
 
 // Arena for longer-lived allocations
@@ -95,6 +98,7 @@ supported_format_mod_pairs: []FormatModPair,
 keyboard: wl.Keyboard, // Keyboard/OtherDevice input
 pointer: wl.Pointer, // Mouse/Trackpad input
 touch: wl.Touch, // Touchscreen input
+
 // State
 keymap: []input.Key.State,
 xkb_keymap: ?xkb.Keymap,
@@ -103,10 +107,11 @@ exit_key: input.Key,
 should_exit: bool = false,
 // Wayland event handling
 ev_thread: std.Thread,
+sys_ev_queue: *SysEvent.Queue,
 
 pub var ev_iter: Event.iter(4096) = undefined;
 
-pub fn init(arena: *Arena) *Client {
+pub fn init(arena: *Arena, sys_ev_queue: *SysEvent.Queue) *Client {
     const alloc = arena.allocator();
     const connection = open_connection: {
         const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return @constCast(&Client.nil);
@@ -249,6 +254,7 @@ pub fn init(arena: *Arena) *Client {
 
         // Event-Handling
         .ev_thread = undefined,
+        .sys_ev_queue = sys_ev_queue,
     };
 
     const initial_surface: *Surface = arena.create(Surface);
@@ -314,17 +320,20 @@ pub fn deinit(client: *Client) void {
 }
 
 fn ev_handle_thread(client: *Client) void {
+    var ev_builder: SysEvent = .nil;
+
     while (!client.should_exit and client.socket != -1) {
-        client.handle_event() catch |err| {
+        client.handle_event(&ev_builder) catch |err| {
             log.err("Wayland Event Thread Hit Error :: {s}", .{@errorName(err)});
             client.should_exit = true;
         };
     }
 }
 
-fn handle_event(client: *Client) !void {
+fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
     const event_iterator = &ev_iter;
 
+    const focused_surface = client.surfaces.items[client.focused_surface];
     const writer = client.connection.writer();
     const ev_opt = try event_iterator.next() orelse blk: {
         std.time.sleep(1_000);
@@ -397,15 +406,38 @@ fn handle_event(client: *Client) !void {
                             }
                         },
                         .key => |key| {
+                            defer ev_builder.* = .nil;
+
+                            ev_builder.type = .keyboard;
+
                             const key_name: input.Key = if (client.xkb_keymap) |keymap| blk: {
                                 break :blk keymap.get_key(key.key);
                             } else .invalid;
 
-                            log.debug("Received key :: code={d}, keyname={s}", .{ key.key, @tagName(key_name) });
                             if (key_name == .q and key.state == .pressed)
                                 client.should_exit = true;
                             if (client.keymap[@intFromEnum(key_name)] != key.state)
                                 client.keymap[@intFromEnum(key_name)] = key.state;
+
+                            ev_builder.key = key_name;
+                            ev_builder.key_state = key.state;
+
+                            client.sys_ev_queue.push(ev_builder.*);
+                        },
+                        .modifiers => |mods| {
+                            log.debug("wl_keyboard :: Modifiers Event :: {{ .serial = {d}, .mods_depressed = {d}, .mods_latched = {d}, .mods_locked = {d}, .group = {d} }}", .{
+                                mods.serial,
+                                mods.mods_depressed,
+                                mods.mods_latched,
+                                mods.mods_locked,
+                                mods.group,
+                            });
+                        },
+                        .enter => {
+                            log.debug("wl_keyboard :: Enter focus", .{});
+                        },
+                        .leave => {
+                            log.debug("wl_keyboard :: Leave focus", .{});
                         },
                         else => {
                             log.debug("Unused wl_keyboard event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
@@ -417,6 +449,42 @@ fn handle_event(client: *Client) !void {
                     }
                 else
                     log.warn("Failed to parse event for wl_keyboard", .{});
+            },
+            .wl_pointer => {
+                const action_opt = wl.Pointer.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .button => |mb| {
+                            ev_builder.type = .mouse_button;
+                            const button: input.MouseButton = @enumFromInt(mb.button);
+
+                            ev_builder.mouse_button = button;
+                            ev_builder.mouse_button_state = mb.state;
+
+                            client.sys_ev_queue.push(ev_builder.*);
+                        },
+                        .enter => {
+                            log.debug("wl_pointer :: Enter focus", .{});
+                        },
+                        .leave => {
+                            log.debug("wl_pointer :: Leave focus", .{});
+                        },
+                        .motion => |motion| {
+                            ev_builder.type = .mouse_move;
+                            ev_builder.mouse_pos_prev = focused_surface.mouse_pos;
+                            ev_builder.mouse_pos_new = .{ .x = motion.surface_x, .y = motion.surface_y };
+                            focused_surface.mouse_pos.x = motion.surface_x;
+                            focused_surface.mouse_pos.y = motion.surface_y;
+                        },
+
+                        .frame => { // Signals end of current pointer event stream
+                            defer ev_builder.* = .nil;
+                            client.sys_ev_queue.push(ev_builder.*);
+                        },
+                        else => {
+                            log.debug("Unused wl_pointer event :: {s}", .{@tagName(action)});
+                        },
+                    };
             },
             .wl_surface => {
                 const action_opt = wl.Surface.Event.parse(ev.header.op, ev.data) catch null;
@@ -449,7 +517,6 @@ fn handle_event(client: *Client) !void {
                 if (action_opt) |action|
                     switch (action) {
                         .configure => |configure| {
-                            const focused_surface = client.surfaces.items[client.focused_surface];
                             focused_surface.xdg_surface.ack_configure(writer, .{
                                 .serial = configure.serial,
                             }) catch |err| return err;
@@ -464,7 +531,6 @@ fn handle_event(client: *Client) !void {
             },
             .xdg_toplevel => {
                 const action_opt = xdg.Toplevel.Event.parse(ev.header.op, ev.data) catch null;
-                const focused_surface = client.surfaces.items[client.focused_surface];
                 if (action_opt) |action|
                     switch (action) {
                         .configure => |configure| {
@@ -793,13 +859,8 @@ const Event = struct {
     }
 };
 
-const Vec2I32 = struct {
-    x: i32,
-    y: i32,
-
-    pub const zero: Vec2I32 = .{ .x = 0, .y = 0 };
-};
-
+const Vec2F32 = math.Vec2F32;
+const Vec2I32 = math.Vec2I32;
 pub const Surface = struct {
     pub const Flags = packed struct {
         acked: bool = false,
@@ -819,6 +880,7 @@ pub const Surface = struct {
     cur_buf: usize,
     dims: Vec2I32,
     pos: Vec2I32,
+    mouse_pos: Vec2F32 = .zero,
     fps_target: i32 = 60,
 
     pub const nil: Surface = .{

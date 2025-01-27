@@ -201,7 +201,6 @@ pub const Keymap = struct {
         keymap.symbols.denit();
     }
     pub fn get_key(keymap: *const Keymap, keycode: u32) input.Key {
-        log.debug("Querying Keymap with code :: {d}", .{keycode});
         const symbol_opt = keymap.keycodes.get(keycode);
         const key_opt = if (symbol_opt) |sym| keymap.symbols.get(sym).? else null;
         const result = if (key_opt) |key| std.meta.stringToEnum(input.Key, key) orelse .invalid else .invalid;
