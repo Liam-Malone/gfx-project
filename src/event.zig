@@ -4,6 +4,7 @@ const input = @import("input.zig");
 const Event = @This();
 
 const Type = enum {
+    invalid,
     /// Keyboard input events
     keyboard,
 
@@ -63,12 +64,12 @@ pub const Queue = struct {
     }
 
     pub fn push(queue: *Q, entry: Event) void {
+        defer queue.write += 1;
         queue.buf[queue.write % queue.buf.len] = entry;
-        queue.write += 1;
     }
 
     pub fn peek(queue: *Q) ?Event {
-        const result = if (queue.read > queue.write)
+        const result = if (queue.read >= queue.write)
             null
         else
             queue.buf[queue.read % queue.buf.len];
@@ -77,12 +78,14 @@ pub const Queue = struct {
     }
 
     pub fn next(queue: *Q) ?Event {
-        const result = if (queue.read > queue.write)
-            null
-        else
-            queue.buf[queue.read % queue.buf.len];
-
-        if (result) |_| queue.read += 1;
+        const result = blk: {
+            if (queue.read >= queue.write) {
+                break :blk null;
+            } else {
+                defer queue.read += 1;
+                break :blk queue.buf[queue.read % queue.buf.len];
+            }
+        };
 
         return result;
     }

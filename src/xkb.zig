@@ -26,35 +26,35 @@ pub const Keycodes = struct {
         var line_iter = std.mem.splitScalar(u8, data, '\n');
         while (line_iter.next()) |line| {
             if (line[0] == 'x') { // name line
-                var word_iter = std.mem.splitScalar(u8, line, ' ');
-                _ = word_iter.next();
-                const name_opt = word_iter.next();
+                var segment_iter = std.mem.splitScalar(u8, line, ' ');
+                _ = segment_iter.next();
+                const name_opt = segment_iter.next();
                 if (name_opt) |name| {
                     result.name = name[1 .. name.len - 1];
                 }
                 continue;
             } else if (line[0] == '}') { // done
             } else {
-                var word_iter = std.mem.splitScalar(u8, line, '=');
-                while (word_iter.next()) |word| {
+                var segment_iter = std.mem.splitScalar(u8, line, '=');
+                while (segment_iter.next()) |segment| {
                     // first char is a tab
-                    if (std.mem.eql(u8, word[1 .. word.len - 1], "minimum")) {
-                        const min_str = word_iter.next().?;
+                    if (std.mem.eql(u8, segment[1 .. segment.len - 1], "minimum")) {
+                        const min_str = segment_iter.next().?;
                         result.min = try std.fmt.parseInt(u32, min_str[1 .. min_str.len - 1], 10);
-                    } else if (std.mem.eql(u8, word[1 .. word.len - 1], "maximum")) {
-                        const max_str = word_iter.next().?;
+                    } else if (std.mem.eql(u8, segment[1 .. segment.len - 1], "maximum")) {
+                        const max_str = segment_iter.next().?;
                         result.max = try std.fmt.parseInt(u32, max_str[1 .. max_str.len - 1], 10);
                     } else if (line[1] == '<') {
-                        var key_end_idx = word.len - 1;
-                        for (word, 0..) |char, idx| {
+                        var key_end_idx = segment.len - 1;
+                        for (segment, 0..) |char, idx| {
                             if (char == '>') key_end_idx = idx + 1;
                         }
-                        const key_name = word[1..key_end_idx];
-                        const key_code_str = word_iter.next().?;
+                        const key_name = segment[1..key_end_idx];
+                        const key_code_str = segment_iter.next().?;
                         const key_code = try std.fmt.parseInt(u32, key_code_str[1 .. key_code_str.len - 1], 10);
 
                         try result.map.put(key_code - result.min, key_name);
-                    }
+                    } else if (line[1] == 'a') {}
                 }
             }
         }
@@ -63,10 +63,7 @@ pub const Keycodes = struct {
     }
 
     pub fn get(self: *const Keycodes, keycode: u32) ?[]const u8 {
-        return if (keycode < self.max and keycode > self.min)
-            self.map.get(keycode)
-        else
-            null;
+        return self.map.get(keycode);
     }
 };
 
@@ -126,8 +123,8 @@ pub const Symbols = struct {
                         var start: usize = 0;
                         var end: usize = 0;
                         for (segment, 0..) |char, idx| {
-                            if (bracket_count < 2 and char == '[') {
-                                bracket_count += 1;
+                            if (bracket_count < 2) {
+                                if (char == '[') bracket_count += 1;
                             } else if (start == 0 and char != ' ') {
                                 start = idx;
                             } else if (start != 0 and (char == ' ' or char == ',')) {
@@ -200,10 +197,17 @@ pub const Keymap = struct {
         keymap.keycodes.deinit();
         keymap.symbols.denit();
     }
+
     pub fn get_key(keymap: *const Keymap, keycode: u32) input.Key {
         const symbol_opt = keymap.keycodes.get(keycode);
-        const key_opt = if (symbol_opt) |sym| keymap.symbols.get(sym).? else null;
-        const result = if (key_opt) |key| std.meta.stringToEnum(input.Key, key) orelse .invalid else .invalid;
+        const result = if (symbol_opt) |sym|
+            std.meta.stringToEnum(input.Key, keymap.symbols.get(sym).?) orelse blk: {
+                log.debug("Failed enum match :: {s}", .{keymap.symbols.get(sym).?});
+                break :blk .invalid;
+            }
+        else
+            .invalid;
+
         return result;
     }
 };

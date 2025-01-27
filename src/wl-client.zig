@@ -259,6 +259,7 @@ pub fn init(arena: *Arena, sys_ev_queue: *SysEvent.Queue) *Client {
 
     const initial_surface: *Surface = arena.create(Surface);
     initial_surface.* = .init(.{
+        .id = 0,
         .app_id = "simple-client",
         .surface_title = "Simple Client",
         .client = client_ptr,
@@ -409,17 +410,9 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
                             defer ev_builder.* = .nil;
 
                             ev_builder.type = .keyboard;
-
-                            const key_name: input.Key = if (client.xkb_keymap) |keymap| blk: {
+                            ev_builder.key = if (client.xkb_keymap) |keymap| blk: {
                                 break :blk keymap.get_key(key.key);
                             } else .invalid;
-
-                            if (key_name == .q and key.state == .pressed)
-                                client.should_exit = true;
-                            if (client.keymap[@intFromEnum(key_name)] != key.state)
-                                client.keymap[@intFromEnum(key_name)] = key.state;
-
-                            ev_builder.key = key_name;
                             ev_builder.key_state = key.state;
 
                             client.sys_ev_queue.push(ev_builder.*);
@@ -547,12 +540,14 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
                             }
                         },
                         .close => {
-                            log.info("Toplevel Received Close Signal", .{});
-                            focused_surface.destroy();
-                            _ = client.surfaces.orderedRemove(client.focused_surface);
-                            if (client.surfaces.items.len == 0) {
-                                client.should_exit = true;
-                            }
+                            defer ev_builder.* = .nil;
+
+                            ev_builder.type = .surface;
+                            ev_builder.surface = .{
+                                .id = focused_surface.id,
+                                .type = .close,
+                            };
+                            client.sys_ev_queue.push(ev_builder.*);
                         },
                         else => {
                             log.debug("xdg_toplevel :: Unused Event :: Header = {{ .id = {d}, .opcode = {d}, .size = {d} }}", .{
@@ -655,6 +650,11 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
             },
         }
     }
+}
+
+pub fn remove_surface(client: *Client, buf_id: u32) void {
+    client.surfaces.items[buf_id].destroy();
+    _ = client.surfaces.orderedRemove(buf_id);
 }
 
 const FormatModPair = struct {
@@ -870,7 +870,8 @@ pub const Surface = struct {
 
     flags: Flags = .{},
     client: *const Client,
-    id: []const u8,
+    id: u32,
+    app_id: []const u8,
     title: []const u8,
     wl_surface: wl.Surface,
     xdg_surface: xdg.Surface,
@@ -884,7 +885,8 @@ pub const Surface = struct {
     fps_target: i32 = 60,
 
     pub const nil: Surface = .{
-        .id = "",
+        .id = 0,
+        .app_id = "",
         .title = "",
         .client = &Client.nil,
         .wl_surface = .{ .id = 0 },
@@ -900,6 +902,7 @@ pub const Surface = struct {
 
     const init_params = struct {
         client: *Client,
+        id: u32,
         app_id: ?[:0]const u8 = null,
         surface_title: ?[:0]const u8 = null,
         compositor: wl.Compositor,
@@ -966,7 +969,8 @@ pub const Surface = struct {
 
         return .{
             .client = params.client,
-            .id = params.app_id orelse "",
+            .id = params.id,
+            .app_id = params.app_id orelse "",
             .title = params.surface_title orelse "",
             .wl_surface = wl_surface,
             .xdg_surface = xdg_surface,
@@ -979,6 +983,7 @@ pub const Surface = struct {
             .fps_target = params.fps_target orelse 60,
         };
     }
+
     pub fn destroy(surface: *Surface) void {
         const writer = surface.client.connection.writer();
         for (surface.buffers) |buf| {

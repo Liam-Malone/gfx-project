@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const vk = @import("vulkan");
 const Drm = @import("Drm.zig");
 const Event = @import("event.zig");
+const input = @import("input.zig");
 
 const GraphicsContext = @import("GraphicsContext.zig");
 const Arena = @import("Arena.zig");
@@ -20,7 +21,7 @@ pub fn main() !void {
         defer arena.release();
 
         const ev_queue: *Event.Queue = arena.create(Event.Queue);
-        ev_queue.* = .init(arena.push(Event, 1024));
+        ev_queue.* = .init(arena.push(Event, 4096));
         // Creating application state
         var state: State = state: {
             const client: *Client = .init(.init(.default), ev_queue);
@@ -172,6 +173,7 @@ pub fn main() !void {
             const time = std.time.milliTimestamp();
 
             if (time - prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
+                // Poll events
                 while (state.events.next()) |ev| {
                     switch (ev.type) {
                         .mouse_move => {
@@ -182,9 +184,24 @@ pub fn main() !void {
                         },
                         .keyboard => {
                             log.debug("Keyboard Event :: {s} key {s}", .{ @tagName(ev.key), @tagName(ev.key_state) });
+                            if (state.client.keymap[@intFromEnum(ev.key)] != ev.key_state)
+                                state.client.keymap[@intFromEnum(ev.key)] = ev.key_state;
+                        },
+                        .surface => switch (ev.surface.type) {
+                            .close => {
+                                state.client.remove_surface(ev.surface.id);
+
+                                if (state.client.surfaces.items.len == 0) {
+                                    state.client.should_exit = true;
+                                }
+                            },
+                            else => {},
                         },
                         else => {},
                     }
+                }
+                if (state.client.keymap[@intFromEnum(input.Key.q)] == .pressed) {
+                    state.client.should_exit = true;
                 }
 
                 red_val -= step;
