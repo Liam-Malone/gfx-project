@@ -1,15 +1,12 @@
 # Wayland Input Handling
 
 - [-] Keyboard & Mouse input events
-    - [x] Basic logging of key inputs (press/release)
-    - [x] Basic xkb_keymap parser
-        - [x] Map Keycode to Symbol
-        - [x] Map Symbol to Key
-        - [x] Map Key to input.Keyboard.Key
-        - [x] Return `XkbMappings` object when given keymap 
-        - [x] Map xkb_keys to keys program cares about
     - [x] Track Key State
+    - [x] Mouse Movement
+    - [x] Mouse Clicks
     - [ ] Track Modifiers
-    - [ ] Basic logging of mouse inputs (press/release)
-- [ ] 'System Event' Queue
+- [-] 'System Event' Queue
+    - Type: keyboard/mouse/window/data
+    - Info: Location/Delta, Key/Button, Signal, Data
 
+### Currently: System Event Queue
