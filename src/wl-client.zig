@@ -453,8 +453,6 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
 
                             ev_builder.mouse_button = button;
                             ev_builder.mouse_button_state = mb.state;
-
-                            client.sys_ev_queue.push(ev_builder.*);
                         },
                         .enter => {
                             log.debug("wl_pointer :: Enter focus", .{});
@@ -527,17 +525,19 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
                 if (action_opt) |action|
                     switch (action) {
                         .configure => |configure| {
+                            defer ev_builder.* = .nil;
                             if (configure.width > focused_surface.dims.x or configure.height > focused_surface.dims.y) {
-                                log.info("Resizing Window :: {d}x{d} -> {d}x{d}", .{
-                                    focused_surface.dims.x,
-                                    focused_surface.dims.y,
-                                    configure.width,
-                                    configure.height,
-                                });
-
                                 focused_surface.dims.x = configure.width;
                                 focused_surface.dims.y = configure.height;
                             }
+
+                            ev_builder.type = .surface;
+                            ev_builder.surface = .{
+                                .id = focused_surface.id,
+                                .type = .{ .resize = .{ .x = configure.width, .y = configure.height } },
+                            };
+
+                            client.sys_ev_queue.push(ev_builder.*);
                         },
                         .close => {
                             defer ev_builder.* = .nil;

@@ -21,7 +21,7 @@ pub fn main() !void {
         defer arena.release();
 
         const ev_queue: *Event.Queue = arena.create(Event.Queue);
-        ev_queue.* = .init(arena.push(Event, 4096));
+        ev_queue.* = .init(arena.push(Event, 2048));
         // Creating application state
         var state: State = state: {
             const client: *Client = .init(.init(.default), ev_queue);
@@ -162,27 +162,31 @@ pub fn main() !void {
         log.info("Vulkan Initialized", .{});
 
         try focused_surface.init_buffers(state.graphics_context.mem_fds);
+        const render_thread = std.Thread.spawn(.{}, draw_thread, .{&state}) catch |err| {
+            log.err("Failed to spawn render thread with err :: {s}", .{@errorName(err)});
+            break :exit err;
+        };
+        defer render_thread.join();
 
-        var red_val: f32 = 1.0;
-        var blu_val: f32 = 0.0;
-        var gre_val: f32 = 1.0;
-        var step: f32 = 0.01;
-        var cur_frame_idx: usize = 0;
         var prev_time: i64 = std.time.milliTimestamp();
-        while (!state.client.should_exit) : (cur_frame_idx = (cur_frame_idx + 1) % state.graphics_context.images.len) {
+        while (!state.client.should_exit) {
             const time = std.time.milliTimestamp();
 
-            if (time - prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
-                // Poll events
+            if (time - prev_time > @divFloor(std.time.ms_per_s, state.tickrate)) {
+                prev_time = time;
+
+                // Poll & handle events
                 while (state.events.next()) |ev| {
                     switch (ev.type) {
                         .mouse_move => {
-                            log.debug("Mouse Move Event :: move :: {d:.2}x{d:.2}", .{ ev.mouse_pos_new.x, ev.mouse_pos_new.y });
+                            // TODO: Keep track of mouse position
                         },
                         .mouse_button => {
-                            log.debug("Mouse Button Event :: button :: {s}", .{@tagName(ev.mouse_button)});
+                            log.debug("Mouse Button Event :: {s} button {s}", .{ @tagName(ev.mouse_button_state), @tagName(ev.mouse_button) });
+                            // TODO: Keep track of mouse button states
                         },
                         .keyboard => {
+                            // TODO: Move keymap to application-level
                             log.debug("Keyboard Event :: {s} key {s}", .{ @tagName(ev.key), @tagName(ev.key_state) });
                             if (state.client.keymap[@intFromEnum(ev.key)] != ev.key_state)
                                 state.client.keymap[@intFromEnum(ev.key)] = ev.key_state;
@@ -195,82 +199,32 @@ pub fn main() !void {
                                     state.client.should_exit = true;
                                 }
                             },
-                            else => {},
+                            .resize => |size| {
+                                // TODO: Implement proper window resizing
+                                log.debug("Unused resize event :: new dimensions {{ .x = {d}, .y = {d} }}", .{ size.x, size.y });
+                            },
+                            .fullscreen => |size| {
+                                // TODO: Implement proper fullscreen support
+                                log.debug("Unused fullscreen event :: dimensions {{ .x = {d}, .y = {d} }}", .{ size.x, size.y });
+                            },
                         },
-                        else => {},
+                        .data => {
+                            // TODO: Implement handling for drag 'n drop / file upload / similar
+                            log.debug("Unused data event", .{});
+                        },
+                        .invalid => {
+                            // TODO: Ensure `invalid` event never shows up
+                            log.debug("WARNING :: received an `invalid` event", .{});
+                        },
                     }
                 }
+
                 if (state.client.keymap[@intFromEnum(input.Key.q)] == .pressed) {
                     state.client.should_exit = true;
                 }
-
-                red_val -= step;
-                blu_val += step;
-                gre_val -= step;
-                if (red_val >= 1.0 or red_val <= 0.0) {
-                    step = -step;
-                }
-
-                prev_time = time;
-
-                const vk_dev = state.graphics_context.dev;
-                vk_dev.wrapper.queueWaitIdle(state.graphics_context.graphics_queue.handle) catch |err| break :exit err;
-
-                const cmd_buf = &state.graphics_context.cmd_bufs[cur_frame_idx];
-                const graphics_queue = state.graphics_context.graphics_queue;
-
-                const clear_value = [_]vk.ClearValue{
-                    .{
-                        .color = .{
-                            .float_32 = [_]f32{ red_val, gre_val, blu_val, 1.0 },
-                        },
-                    },
-                };
-
-                vk_dev.wrapper.beginCommandBuffer(cmd_buf.*, &.{
-                    .flags = .{},
-                }) catch |err| break :exit err;
-
-                vk_dev.wrapper.cmdBeginRenderPass(cmd_buf.*, &.{
-                    .render_pass = state.graphics_context.render_pass,
-                    .framebuffer = state.graphics_context.framebuffers[cur_frame_idx],
-                    .render_area = .{
-                        .offset = .{
-                            .x = 0,
-                            .y = 0,
-                        },
-                        .extent = .{
-                            .width = @intCast(focused_surface.dims.x),
-                            .height = @intCast(focused_surface.dims.y),
-                        },
-                    },
-                    .clear_value_count = 1,
-                    .p_clear_values = &clear_value,
-                }, .@"inline");
-
-                vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
-                vk_dev.wrapper.endCommandBuffer(cmd_buf.*) catch |err| break :exit err;
-
-                {
-                    vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
-                        .{
-                            .command_buffer_count = 1,
-                            .p_command_buffers = &[_]vk.CommandBuffer{cmd_buf.*},
-                        },
-                    }, .null_handle) catch |err| break :exit err;
-
-                    focused_surface.wl_surface.damage(state.client.connection.writer(), .{
-                        .x = 0,
-                        .y = 0,
-                        .width = focused_surface.dims.x,
-                        .height = focused_surface.dims.y,
-                    }) catch |err| break :exit err;
-
-                    focused_surface.wl_surface.commit(state.client.connection.writer(), .{}) catch |err| break :exit err;
-                }
             } else {
-                const fps_delay = @divFloor(std.time.ms_per_s, state.fps_target) - (time - prev_time);
-                std.time.sleep(@intCast(fps_delay * std.time.ns_per_ms));
+                const tick_delay = @divFloor(std.time.ms_per_s, state.tickrate) - (time - prev_time);
+                std.time.sleep(@intCast(tick_delay * std.time.ns_per_ms));
             }
         }
     } catch |err| { // program err exit path
@@ -282,12 +236,119 @@ pub fn main() !void {
     return return_val;
 }
 
+fn draw_thread(state: *State) void {
+    var draw_ctx: DrawContext = .{
+        .red_val = 0.1,
+        .blu_val = 0.3,
+        .gre_val = 0.1,
+        .step = 0.01,
+        .frame_idx = 0,
+        .prev_time = std.time.milliTimestamp(),
+    };
+
+    // main render loop
+    while (!state.client.should_exit) : (draw_ctx.frame_idx = (draw_ctx.frame_idx + 1) % state.graphics_context.images.len) {
+        draw(state, &draw_ctx) catch |err| {
+            log.err("Draw thread encountered fatal error :: {s}", .{@errorName(err)});
+            state.client.should_exit = true;
+        };
+    }
+}
+
+fn draw(state: *State, ctx: *DrawContext) !void {
+    const focused_surface = state.client.surfaces.items[state.client.focused_surface];
+
+    const time = std.time.milliTimestamp();
+
+    if (time - ctx.prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
+        ctx.prev_time = time;
+
+        ctx.red_val -= ctx.step;
+        ctx.blu_val += ctx.step;
+        ctx.gre_val -= ctx.step;
+        if (ctx.red_val >= 1.0 or ctx.red_val <= 0.0) {
+            ctx.step = -ctx.step;
+        }
+
+        ctx.prev_time = time;
+
+        const vk_dev = state.graphics_context.dev;
+        try vk_dev.wrapper.queueWaitIdle(state.graphics_context.graphics_queue.handle);
+
+        const cmd_buf = &state.graphics_context.cmd_bufs[ctx.frame_idx];
+        const graphics_queue = state.graphics_context.graphics_queue;
+
+        const clear_value = [_]vk.ClearValue{
+            .{
+                .color = .{
+                    .float_32 = [_]f32{ ctx.red_val, ctx.gre_val, ctx.blu_val, 1.0 },
+                },
+            },
+        };
+
+        try vk_dev.wrapper.beginCommandBuffer(cmd_buf.*, &.{
+            .flags = .{},
+        });
+
+        vk_dev.wrapper.cmdBeginRenderPass(cmd_buf.*, &.{
+            .render_pass = state.graphics_context.render_pass,
+            .framebuffer = state.graphics_context.framebuffers[ctx.frame_idx],
+            .render_area = .{
+                .offset = .{
+                    .x = 0,
+                    .y = 0,
+                },
+                .extent = .{
+                    .width = @intCast(focused_surface.dims.x),
+                    .height = @intCast(focused_surface.dims.y),
+                },
+            },
+            .clear_value_count = 1,
+            .p_clear_values = &clear_value,
+        }, .@"inline");
+
+        vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
+        try vk_dev.wrapper.endCommandBuffer(cmd_buf.*);
+
+        {
+            try vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
+                .{
+                    .command_buffer_count = 1,
+                    .p_command_buffers = &[_]vk.CommandBuffer{cmd_buf.*},
+                },
+            }, .null_handle);
+
+            try focused_surface.wl_surface.damage(state.client.connection.writer(), .{
+                .x = 0,
+                .y = 0,
+                .width = focused_surface.dims.x,
+                .height = focused_surface.dims.y,
+            });
+
+            try focused_surface.wl_surface.commit(state.client.connection.writer(), .{});
+        }
+    } else {
+        const fps_delay = @divFloor(std.time.ms_per_s, state.fps_target) - (time - ctx.prev_time);
+        std.time.sleep(@intCast(fps_delay * std.time.ns_per_ms));
+    }
+}
+
+const DrawContext = struct {
+    red_val: f32,
+    blu_val: f32,
+    gre_val: f32,
+    step: f32,
+    frame_idx: usize,
+    prev_time: i64,
+};
+
 const State = struct {
     client: *Client,
     vk_format: vk.Format,
     graphics_context: GraphicsContext,
     events: *Event.Queue,
     fps_target: i32 = 60,
+    tickrate: i32 = 60,
 
     pub fn deinit(state: *State) void {
         state.client.deinit();
