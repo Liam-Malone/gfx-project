@@ -1,40 +1,48 @@
-# Gfx Project
+# Graphics Project
 
-I started out writing a Wayland client with just libwayland in [C](https://github.com/Liam-Malone/wayland_gfx) and wanted to [duplicate in Zig](https://github.com/Liam-Malone/zig-wayland_gfx). I got curious and decided I'd like to try invoking calls through the wayland socket directly, no libwayland.
-I found [this guide](https://gaultier.github.io/blog/wayland_xrom_scratch.html) on writing a (CPU-rendered) Wayland GUI client from scratch in C, and decided to try following along in Zig.
+This is a hobby project in which I am exploring everything related to creating, interactive, graphical (3D) programs to run on modern linux desktop systems.
 
-One I had the client working with a CPU-rendered window, I figured I could take this further, and start doing GPU rendering.
-The next step was creating a basic Vulkan context and rendering a blank screen, taking advantage of the DMABuf protocol.
+This involves:
 
-Now I'm looking to continue developing this project into more of a proper rendering engine, as I learn more about graphics programming with Vulkan.
+- Connecting to the host Wayland compositor
+- Request creation of a window
+- Processing & responding to system events
+- Processing & responding to user inputs
+- Rendering & presenting frames to the screen
 
-## Code Generation
 
-In the process of attaining a basic window, I realized it would be much easier if I didn't have to manually write everything for every interface I want to use. With this goal in mind, I wrote [`wl-zig-bindgen.zig`](./src/wl-zig-bindgen.zig) to produce Zig code to use for interacting with the Wayland server, given a wayland xml specification document.
+To accomplish all this (without relying on external libraries), I needed to:
+
+- Write my own tool to generate code based from a given list of wayland protocol specifications ([found here](./src/wl-bindgen.zig)).
+- Write my own framework for communicating with the wayland compositor through the wayland wire protocol ([found here](./src/wl-msg.zig)).
+- Write a tool for parsing xkb_v1 keyboard keymap formats ([found here](./src/xkb.zig)).
+- Use Vulkan to create and write to the on-GPU buffers to render to the screen.
 
 
 ## Goals
 
 - [x] Basic Window
-- [x] Vulkan Context
-- [-] Input Event Handling
+- [x] Vulkan-Based Rendering
+- [x] Input Event Handling
 - [ ] Hello Triangle
 - [ ] Texture/Image Rendering
-- [ ] 3D Graphics Rendering
+- [ ] Text/Font Rendering
+- [ ] Rendering 3D Objects & Scenes
+- [ ] Lighting Simulation
 
 
 #### Next Steps
 
-- [x] Re-structure wayland interface
-- [x] Move wayland-specific client handling to it's own file
-- [-] Keyboard/Mouse input events
-- [ ] Proper vulkan swapchain creation pipeline
-- [ ] Window resizing
+- [-] System event queue
+- [-] Hello Triangle
+- [ ] (?) Switch from VkImage -> Vulkan Surface
+- [ ] Vulkan Synchronization
+- [ ] Vulkan Swapchain Creation Pipeline
+- [ ] Image loading/rendering
 
 
 ### Potential Future Goals
 
-- [ ] Abstract Windowing/Input Handling to Standalone Library
 - [ ] Cross Platform Support (Mac/Windows)
 - [ ] Game (/Engine) Based on This Project
 
