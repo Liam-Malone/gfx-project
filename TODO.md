@@ -1,12 +1,15 @@
-# Wayland Input Handling
+# Aims for today
 
-- [-] Keyboard & Mouse input events
-    - [x] Track Key State
-    - [x] Mouse Movement
-    - [x] Mouse Clicks
-    - [ ] Track Modifiers
-- [-] 'System Event' Queue
-    - Type: keyboard/mouse/window/data
-    - Info: Location/Delta, Key/Button, Signal, Data
+## Primary goals
 
-### Currently: System Event Queue
+- [-] Cleanup of system event queue
+- [ ] Separate update & render threads
+
+## Assuming all goes smoothly
+
+- [ ] (??) Switch from using VkImage -> Vulkan Surface
+- [ ] Properly utilize Vulkan Synchronization
+
+## If I'm really moving fast
+
+- [ ] Full Hello Triangle
