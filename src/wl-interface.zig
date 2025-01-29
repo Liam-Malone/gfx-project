@@ -134,6 +134,7 @@ pub const Registry = struct {
     }
 
     pub fn remove(self: *Registry, obj: anytype) void {
+        log.debug("deleting object {s}#{d}", .{ @TypeOf(obj).name, obj.id });
         self.free_list.push(obj.id);
         _ = self.elems.remove(obj.id);
     }

@@ -343,6 +343,28 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
     if (ev_opt) |ev| {
         const ev_interface = interface.registry.get(ev.header.id) orelse return;
         switch (ev_interface) {
+            .wl_buffer => {
+                const action_opt = wl.Buffer.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .release => {
+                            log.debug("Compositor has released wl_buffer", .{});
+                        },
+                    }
+                else
+                    log.warn("Failed to parse event for wl_buffer", .{});
+            },
+            .wl_callback => {
+                const action_opt = wl.Callback.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .done => |cb| {
+                            log.debug("wl_callback :: received for object :: {d}", .{cb.callback_data});
+                        },
+                    }
+                else
+                    log.warn("Failed to parse event for wl_callback", .{});
+            },
             .wl_display => {
                 const action_opt = wl.Display.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
@@ -356,6 +378,7 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
                                 err.code,
                                 err.message,
                             });
+                            return error.WlDisplayError;
                         },
                     }
                 else
@@ -571,6 +594,20 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
                     }
                 else
                     log.warn("Failed to parse event for zxdg_toplevel_decoration_v1", .{});
+            },
+            .zwp_linux_buffer_params_v1 => {
+                const action_opt = dmab.LinuxBufferParamsV1.Event.parse(ev.header.op, ev.data) catch null;
+                if (action_opt) |action|
+                    switch (action) {
+                        .created => |buf| {
+                            log.debug("zwp_linux_buffer_params_v1 :: successfully created buffer of id :: {d}", .{buf.buffer});
+                        },
+                        .failed => {
+                            log.debug("zwp_linux_buffer_params_v1 :: buffer creation failed", .{});
+                        },
+                    }
+                else
+                    log.warn("Failed to parse event for zwp_linux_buffer_params_v1", .{});
             },
             .zwp_linux_dmabuf_feedback_v1 => {
                 const feedback_opt = dmab.LinuxDmabufFeedbackV1.Event.parse(ev.header.op, ev.data) catch null;
@@ -877,7 +914,6 @@ pub const Surface = struct {
     xdg_surface: xdg.Surface,
     toplevel: xdg.Toplevel,
     decorations: xdgd.ToplevelDecorationV1,
-    buffers: [BufCount]wl.Buffer,
     cur_buf: usize,
     dims: Vec2I32,
     pos: Vec2I32,
@@ -893,7 +929,6 @@ pub const Surface = struct {
         .xdg_surface = .{ .id = 0 },
         .toplevel = .{ .id = 0 },
         .decorations = .{ .id = 0 },
-        .buffers = undefined,
         .cur_buf = 0,
         .dims = .zero,
         .pos = .zero,
@@ -908,7 +943,6 @@ pub const Surface = struct {
         compositor: wl.Compositor,
         wm_base: xdg.WmBase,
         decoration_manager: xdgd.DecorationManagerV1,
-        buffers: ?[BufCount]wl.Buffer = null,
         dims: ?Vec2I32 = null,
         pos: ?Vec2I32 = null,
         fps_target: ?i32 = null,
@@ -976,7 +1010,6 @@ pub const Surface = struct {
             .xdg_surface = xdg_surface,
             .toplevel = xdg_toplevel,
             .decorations = decorations,
-            .buffers = params.buffers orelse undefined,
             .cur_buf = 0,
             .dims = params.dims orelse .zero,
             .pos = params.pos orelse .zero,
@@ -986,11 +1019,6 @@ pub const Surface = struct {
 
     pub fn destroy(surface: *Surface) void {
         const writer = surface.client.connection.writer();
-        for (surface.buffers) |buf| {
-            buf.destroy(writer, .{}) catch |err| {
-                log.err("Surface :: deinit() :: failed to send wl_buffer.destroy() message with err :: {s}", .{@errorName(err)});
-            };
-        }
         surface.decorations.destroy(writer, .{}) catch |err| {
             log.err("Surface :: deinit() :: failed to send xdg_decorations.destroy() message with err :: {s}", .{@errorName(err)});
         };
@@ -1003,73 +1031,6 @@ pub const Surface = struct {
         surface.wl_surface.destroy(writer, .{}) catch |err| {
             log.err("Surface :: deinit() :: failed to send wl_surface.destroy() message with err :: {s}", .{@errorName(err)});
         };
-    }
-
-    pub fn init_buffers(
-        surface: *Surface,
-        fd: [BufCount]std.posix.fd_t,
-    ) !void {
-        for (0..BufCount) |idx| {
-            const buffer = create_buffer(surface, fd[idx], surface.client.gfx_format, surface.dims);
-            if (buffer.id != 0) surface.buffers[idx] = buffer else return error.FailedToCreateBuffer;
-        }
-
-        surface.wl_surface.attach(surface.client.connection.writer(), .{
-            .buffer = surface.buffers[surface.cur_buf].id,
-            .x = 0,
-            .y = 0,
-        }) catch return error.FailedToAttachBuffer;
-        surface.wl_surface.commit(surface.client.connection.writer(), .{}) catch return error.FailedToCommitSurface;
-    }
-
-    fn create_buffer(
-        surface: *Surface,
-        fd: std.posix.fd_t,
-        format: Drm.Format,
-        dims: Vec2I32,
-    ) wl.Buffer {
-        const writer = surface.client.connection.writer();
-
-        const dmabuf_params_opt = surface.client.dmabuf.create_params(writer, .{}) catch |err| nil: {
-            log.err("Failed to create linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
-            break :nil null;
-        };
-
-        const wl_buffer = if (dmabuf_params_opt) |dmabuf_params| buffer: {
-            log.debug("Creating wl_buffer :: fd = {d}", .{fd});
-            dmabuf_params.add(writer, .{
-                .fd = fd,
-                .plane_idx = 0,
-                .offset = 0,
-                .stride = @intCast(dims.x * 4),
-                .modifier_hi = Drm.Modifier.linear.hi(),
-                .modifier_lo = Drm.Modifier.linear.lo(),
-            }) catch |err| {
-                log.err("Failed to add data to linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
-                break :buffer null;
-            };
-
-            log.debug("Creating wl_buffer of dimensions :: {d}x{d}", .{ dims.x, dims.y });
-            const wl_buffer = dmabuf_params.create_immed(writer, .{
-                .width = @intCast(dims.x),
-                .height = @intCast(dims.y),
-                .format = @intFromEnum(format),
-                .flags = .{},
-            }) catch |err| {
-                log.err("Failed to create wl_buffer due to err :: {s}", .{@errorName(err)});
-                break :buffer null;
-            };
-
-            dmabuf_params.destroy(writer, .{}) catch |err| {
-                log.err("Failed to destroy linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
-            };
-
-            break :buffer wl_buffer;
-        } else buffer: {
-            break :buffer null;
-        };
-
-        if (wl_buffer) |buffer| return buffer else return .{ .id = 0 };
     }
 };
 

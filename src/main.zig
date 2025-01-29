@@ -30,11 +30,12 @@ pub fn main() !void {
                 .events = ev_queue,
                 .vk_format = undefined,
                 .graphics_context = undefined,
+                .render_thread = undefined,
             };
         };
         defer state.deinit();
 
-        var focused_surface: *Client.Surface = state.client.surfaces.items[state.client.focused_surface];
+        const focused_surface: *Client.Surface = state.client.surfaces.items[state.client.focused_surface];
 
         while (!focused_surface.flags.acked) {}
         _ = state.client.dmabuf.get_surface_feedback(state.client.connection.writer(), .{
@@ -80,6 +81,7 @@ pub fn main() !void {
 
             var graphics_context = GraphicsContext.init(
                 arena,
+                state.client,
                 "Simple Window",
                 .{
                     .width = screen_width,
@@ -115,45 +117,6 @@ pub fn main() !void {
                 break :exit err;
             };
 
-            for (graphics_context.cmd_bufs, 0..) |cmd_buf, idx| {
-                try vk_dev.wrapper.beginCommandBuffer(cmd_buf, &.{
-                    .flags = .{},
-                });
-
-                const clear_value = [_]vk.ClearValue{.{
-                    .color = .{
-                        .float_32 = [_]f32{ 1.0, 1.0, 1.0, 1.0 },
-                    },
-                }};
-
-                vk_dev.wrapper.cmdBeginRenderPass(cmd_buf, &.{
-                    .render_pass = graphics_context.render_pass,
-                    .framebuffer = graphics_context.framebuffers[idx],
-                    .render_area = .{
-                        .offset = .{
-                            .x = 0,
-                            .y = 0,
-                        },
-                        .extent = .{
-                            .width = screen_width,
-                            .height = screen_height,
-                        },
-                    },
-                    .clear_value_count = 1,
-                    .p_clear_values = &clear_value,
-                }, .@"inline");
-
-                vk_dev.wrapper.cmdEndRenderPass(cmd_buf);
-                vk_dev.wrapper.endCommandBuffer(cmd_buf) catch |err| break :exit err;
-            }
-
-            vk_dev.wrapper.queueSubmit(graphics_context.graphics_queue.handle, 1, &[_]vk.SubmitInfo{
-                .{
-                    .command_buffer_count = 1,
-                    .p_command_buffers = graphics_context.cmd_bufs.ptr,
-                },
-            }, .null_handle) catch |err| break :exit err;
-
             log.info("Initial Render Dimensions: {d}x{d}", .{ screen_width, screen_height });
             // Return constructed state
             break :vk_state graphics_context;
@@ -161,15 +124,15 @@ pub fn main() !void {
 
         log.info("Vulkan Initialized", .{});
 
-        try focused_surface.init_buffers(state.graphics_context.mem_fds);
         const render_thread = std.Thread.spawn(.{}, draw_thread, .{&state}) catch |err| {
             log.err("Failed to spawn render thread with err :: {s}", .{@errorName(err)});
             break :exit err;
         };
-        defer render_thread.join();
+        log.debug("Render thread spawned", .{});
+        state.render_thread = render_thread;
 
         var prev_time: i64 = std.time.milliTimestamp();
-        while (!state.client.should_exit) {
+        while (!state.client.should_exit and state.client.socket != -1) {
             const time = std.time.milliTimestamp();
 
             if (time - prev_time > @divFloor(std.time.ms_per_s, state.tickrate)) {
@@ -237,22 +200,24 @@ pub fn main() !void {
 }
 
 fn draw_thread(state: *State) void {
-    var draw_ctx: DrawContext = .{
+    var ctx: DrawContext = .{
         .red_val = 0.1,
         .blu_val = 0.3,
         .gre_val = 0.1,
         .step = 0.01,
-        .frame_idx = 0,
+        .idx = 0,
+        .swapchain = state.graphics_context.swapchain,
         .prev_time = std.time.milliTimestamp(),
     };
 
     // main render loop
-    while (!state.client.should_exit) : (draw_ctx.frame_idx = (draw_ctx.frame_idx + 1) % state.graphics_context.images.len) {
-        draw(state, &draw_ctx) catch |err| {
+    while (!state.client.should_exit and state.client.socket != -1) {
+        draw(state, &ctx) catch |err| {
             log.err("Draw thread encountered fatal error :: {s}", .{@errorName(err)});
             state.client.should_exit = true;
         };
     }
+    log.debug("Draw thread has completed execution", .{});
 }
 
 fn draw(state: *State, ctx: *DrawContext) !void {
@@ -260,76 +225,68 @@ fn draw(state: *State, ctx: *DrawContext) !void {
 
     const time = std.time.milliTimestamp();
 
-    if (time - ctx.prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
-        ctx.prev_time = time;
+    if (!state.client.should_exit) {
+        if (time - ctx.prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
+            ctx.prev_time = time;
 
-        ctx.red_val -= ctx.step;
-        ctx.blu_val += ctx.step;
-        ctx.gre_val -= ctx.step;
-        if (ctx.red_val >= 1.0 or ctx.red_val <= 0.0) {
-            ctx.step = -ctx.step;
-        }
+            ctx.red_val -= ctx.step;
+            ctx.blu_val += ctx.step;
+            ctx.gre_val -= ctx.step;
+            if (ctx.red_val >= 1.0 or ctx.red_val <= 0.0)
+                ctx.step = -ctx.step;
 
-        ctx.prev_time = time;
+            const vk_dev = state.graphics_context.dev;
+            try vk_dev.wrapper.queueWaitIdle(state.graphics_context.graphics_queue.handle);
 
-        const vk_dev = state.graphics_context.dev;
-        try vk_dev.wrapper.queueWaitIdle(state.graphics_context.graphics_queue.handle);
+            const cmd_buf = &state.graphics_context.cmd_bufs[ctx.idx];
+            const graphics_queue = state.graphics_context.graphics_queue;
 
-        const cmd_buf = &state.graphics_context.cmd_bufs[ctx.frame_idx];
-        const graphics_queue = state.graphics_context.graphics_queue;
-
-        const clear_value = [_]vk.ClearValue{
-            .{
-                .color = .{
-                    .float_32 = [_]f32{ ctx.red_val, ctx.gre_val, ctx.blu_val, 1.0 },
+            const clear_value = [_]vk.ClearValue{
+                .{
+                    .color = .{
+                        .float_32 = [_]f32{ ctx.red_val, ctx.gre_val, ctx.blu_val, 1.0 },
+                    },
                 },
-            },
-        };
+            };
 
-        try vk_dev.wrapper.beginCommandBuffer(cmd_buf.*, &.{
-            .flags = .{},
-        });
+            try vk_dev.wrapper.beginCommandBuffer(cmd_buf.*, &.{
+                .flags = .{},
+            });
 
-        vk_dev.wrapper.cmdBeginRenderPass(cmd_buf.*, &.{
-            .render_pass = state.graphics_context.render_pass,
-            .framebuffer = state.graphics_context.framebuffers[ctx.frame_idx],
-            .render_area = .{
-                .offset = .{
-                    .x = 0,
-                    .y = 0,
+            vk_dev.wrapper.cmdBeginRenderPass(cmd_buf.*, &.{
+                .render_pass = state.graphics_context.render_pass,
+                .framebuffer = state.graphics_context.framebuffers[ctx.idx],
+                .render_area = .{
+                    .offset = .{
+                        .x = 0,
+                        .y = 0,
+                    },
+                    .extent = .{
+                        .width = @intCast(focused_surface.dims.x),
+                        .height = @intCast(focused_surface.dims.y),
+                    },
                 },
-                .extent = .{
-                    .width = @intCast(focused_surface.dims.x),
-                    .height = @intCast(focused_surface.dims.y),
-                },
-            },
-            .clear_value_count = 1,
-            .p_clear_values = &clear_value,
-        }, .@"inline");
+                .clear_value_count = 1,
+                .p_clear_values = &clear_value,
+            }, .@"inline");
 
-        vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
-        try vk_dev.wrapper.endCommandBuffer(cmd_buf.*);
+            vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
+            try vk_dev.wrapper.endCommandBuffer(cmd_buf.*);
 
-        {
             try vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
                 .{
                     .command_buffer_count = 1,
-                    .p_command_buffers = &[_]vk.CommandBuffer{cmd_buf.*},
+                    .p_command_buffers = &.{cmd_buf.*},
                 },
-            }, .null_handle);
+            }, ctx.swapchain.sync.in_flight_fences[ctx.idx]);
 
-            try focused_surface.wl_surface.damage(state.client.connection.writer(), .{
-                .x = 0,
-                .y = 0,
-                .width = focused_surface.dims.x,
-                .height = focused_surface.dims.y,
-            });
-
-            try focused_surface.wl_surface.commit(state.client.connection.writer(), .{});
+            // Present & prep next image
+            try ctx.swapchain.present(state.client.connection.writer(), focused_surface.wl_surface);
+            // ctx.idx = try ctx.swapchain.acquire_next(state.graphics_context.dev);
+        } else {
+            const fps_delay = @divFloor(std.time.ms_per_s, state.fps_target) - (time - ctx.prev_time);
+            std.time.sleep(@intCast(fps_delay * std.time.ns_per_ms));
         }
-    } else {
-        const fps_delay = @divFloor(std.time.ms_per_s, state.fps_target) - (time - ctx.prev_time);
-        std.time.sleep(@intCast(fps_delay * std.time.ns_per_ms));
     }
 }
 
@@ -338,7 +295,8 @@ const DrawContext = struct {
     blu_val: f32,
     gre_val: f32,
     step: f32,
-    frame_idx: usize,
+    idx: usize,
+    swapchain: *GraphicsContext.Swapchain,
     prev_time: i64,
 };
 
@@ -347,12 +305,21 @@ const State = struct {
     vk_format: vk.Format,
     graphics_context: GraphicsContext,
     events: *Event.Queue,
+    render_thread: std.Thread,
     fps_target: i32 = 60,
     tickrate: i32 = 60,
 
     pub fn deinit(state: *State) void {
-        state.client.deinit();
+        state.render_thread.join();
+        log.debug("completed render_thread join", .{});
+
         state.graphics_context.deinit();
+        log.debug("completed graphics_context deinit", .{});
+
+        state.client.deinit();
+        log.debug("completed client deinit", .{});
+
+        log.debug("completed state deinit, exiting", .{});
     }
 };
 

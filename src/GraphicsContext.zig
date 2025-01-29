@@ -1,11 +1,4 @@
-const std = @import("std");
-const Allocator = std.mem.Allocator;
-const Arena = @import("Arena.zig");
-const vk = @import("vulkan");
-const vk_log = std.log.scoped(.vulkan);
-
 const GraphicsContext = @This();
-pub const BufferCount = 2;
 
 const required_device_extensions = [_][*:0]const u8{
     vk.extensions.khr_swapchain.name,
@@ -54,14 +47,14 @@ const vkEnumeratePhysicalDevices = @extern(vk.PfnEnumeratePhysicalDevices, .{
     .library_name = "vulkan",
 });
 
-const ImageCount = 2;
+const ImageCount = 3;
 
 allocator: Allocator,
 arena: *Arena,
 
 vkb: BaseDispatch,
 instance: Instance,
-// surface: vk.SurfaceKHR,
+
 pdev: vk.PhysicalDevice,
 props: vk.PhysicalDeviceProperties,
 mem_props: vk.PhysicalDeviceMemoryProperties,
@@ -69,13 +62,11 @@ mem_props: vk.PhysicalDeviceMemoryProperties,
 dev: Device,
 graphics_queue: Queue,
 // present_queue: Queue,
+swapchain: *Swapchain,
 
 extent: vk.Extent3D,
 format: vk.Format,
-images: [ImageCount]vk.Image,
-image_views: [ImageCount]vk.ImageView,
-export_mem: [ImageCount]vk.DeviceMemory,
-mem_fds: [ImageCount]c_int,
+
 cmd_pool: vk.CommandPool,
 cmd_bufs: []vk.CommandBuffer,
 render_pass: vk.RenderPass,
@@ -88,6 +79,7 @@ framebuffers: []vk.Framebuffer = undefined,
 
 pub fn init(
     arena: *Arena,
+    client: *@"wl-client",
     app_name: [*:0]const u8,
     extent: vk.Extent3D,
     format: vk.Format,
@@ -168,7 +160,7 @@ pub fn init(
             .pp_enabled_extension_names = @ptrCast(&required_device_extensions),
         }, null);
     } catch |err| {
-        vk_log.err("Failed to create Vulkan Logical Device with error: {s}", .{@errorName(err)});
+        log.err("Failed to create Vulkan Logical Device with error: {s}", .{@errorName(err)});
         return error.VkDeviceCreationFailed;
     };
     const vkd = try alloc.create(DeviceDispatch);
@@ -181,125 +173,22 @@ pub fn init(
         graphics_family,
     );
 
-    const images = [ImageCount]vk.Image{
-        dev.wrapper.createImage(dev.handle, &.{
-            .flags = .{ .@"2d_view_compatible_bit_ext" = true },
-            .image_type = .@"2d",
-            .extent = .{
-                .width = extent.width,
-                .height = extent.height,
-                .depth = extent.depth,
-            },
-            .mip_levels = 1,
-            .array_layers = 1,
-            .format = format,
-            .tiling = .linear,
-            .initial_layout = .present_src_khr,
-            .usage = .{
-                .transfer_src_bit = true,
-                .color_attachment_bit = true,
-            },
-            .samples = .{ .@"1_bit" = true },
-            .sharing_mode = .exclusive,
-        }, null) catch |err| {
-            vk_log.err("Failed to create VkImage with error: {s}", .{@errorName(err)});
-            return err;
-        },
-        dev.wrapper.createImage(dev.handle, &.{
-            .flags = .{ .@"2d_view_compatible_bit_ext" = true },
-            .image_type = .@"2d",
-            .extent = .{
-                .width = extent.width,
-                .height = extent.height,
-                .depth = extent.depth,
-            },
-            .mip_levels = 1,
-            .array_layers = 1,
-            .format = format,
-            .tiling = .linear,
-            .initial_layout = .present_src_khr,
-            .usage = .{
-                .transfer_src_bit = true,
-                .color_attachment_bit = true,
-            },
-            .samples = .{ .@"1_bit" = true },
-            .sharing_mode = .exclusive,
-        }, null) catch |err| {
-            vk_log.err("Failed to create VkImage with error: {s}", .{@errorName(err)});
-            return err;
-        },
-    };
-
-    var image_views: [ImageCount]vk.ImageView = undefined;
-    var fds: [ImageCount]c_int = undefined;
-    var export_mem: [ImageCount]vk.DeviceMemory = undefined;
-    for (images, 0..) |vk_image, idx| {
-        image_views[idx] = dev.wrapper.createImageView(dev.handle, &.{
-            .view_type = .@"2d",
-            .image = vk_image,
-            .format = format,
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-            .components = .{
-                .r = .r,
-                .g = .g,
-                .b = .b,
-                .a = .a,
-            },
-        }, null) catch |err| {
-            vk_log.err("Failed to create VkImageView with error: {s}", .{@errorName(err)});
-            return err;
-        };
-
-        const mem_reqs = dev.wrapper.getImageMemoryRequirements(dev.handle, vk_image);
-
-        const mem_type: vk.MemoryType = mem_type: {
-            const pdev_mem_reqs = instance.wrapper.getPhysicalDeviceMemoryProperties(physical_device);
-            var mem_idx: u32 = 0;
-            while (mem_idx < pdev_mem_reqs.memory_type_count) : (mem_idx += 1) {
-                const mem_type_flags = pdev_mem_reqs.memory_types[idx].property_flags;
-                if (mem_reqs.memory_type_bits & (@as(u6, 1) << @as(u3, @intCast(mem_idx))) != 0 and (mem_type_flags.host_coherent_bit and mem_type_flags.host_visible_bit)) {
-                    break :mem_type pdev_mem_reqs.memory_types[mem_idx];
-                }
-            }
-
-            break :mem_type .{
-                .property_flags = .{},
-                .heap_index = 0,
-            };
-        };
-
-        export_mem[idx] = try dev.wrapper.allocateMemory(dev.handle, &.{
-            .p_next = &vk.ExportMemoryAllocateInfo{
-                .handle_types = .{
-                    .dma_buf_bit_ext = true,
-                    .host_allocation_bit_ext = true,
-                },
-            },
-            .allocation_size = mem_reqs.size,
-            .memory_type_index = mem_type.heap_index,
-        }, null);
-
-        try dev.wrapper.bindImageMemory(dev.handle, vk_image, export_mem[idx], 0);
-
-        fds[idx] = try dev.wrapper.getMemoryFdKHR(dev.handle, &.{
-            .memory = export_mem[idx],
-            .handle_type = .{ .dma_buf_bit_ext = true },
-        });
-    }
-
+    const sc: *Swapchain = try .init(
+        arena,
+        client,
+        instance,
+        dev,
+        physical_device,
+        format,
+        .{ .width = extent.width, .height = extent.height },
+        ImageCount,
+    );
     const cmd_pool = try dev.wrapper.createCommandPool(dev.handle, &.{
         .queue_family_index = graphics_queue.family,
         .flags = .{ .reset_command_buffer_bit = true },
     }, null);
 
-    const image_count = 2;
-    const cmd_bufs = arena.push(vk.CommandBuffer, image_count);
+    const cmd_bufs = arena.push(vk.CommandBuffer, ImageCount);
     try dev.wrapper.allocateCommandBuffers(dev.handle, &.{
         .command_pool = cmd_pool,
         .level = .primary,
@@ -345,13 +234,10 @@ pub fn init(
         .mem_props = instance.getPhysicalDeviceMemoryProperties(physical_device),
         .dev = dev,
         .graphics_queue = graphics_queue,
+        .swapchain = sc,
 
         .extent = extent,
         .format = format,
-        .images = images,
-        .image_views = image_views,
-        .export_mem = export_mem,
-        .mem_fds = fds,
         .cmd_pool = cmd_pool,
         .cmd_bufs = cmd_bufs,
         .render_pass = render_pass,
@@ -363,17 +249,13 @@ pub fn init(
 }
 
 pub fn deinit(ctx: *GraphicsContext) void {
-    ctx.dev.destroyDevice(null);
-    ctx.instance.destroyInstance(null);
+    defer ctx.instance.destroyInstance(null);
+    defer ctx.dev.destroyDevice(null);
 
     ctx.allocator.destroy(ctx.dev.wrapper);
     ctx.allocator.destroy(ctx.instance.wrapper);
 }
 
-const DeviceCandidate = struct {
-    pdev: vk.PhysicalDevice,
-    props: vk.PhysicalDeviceProperties,
-};
 fn select_physical_device(arena: Allocator, instance: Instance, devices: []vk.PhysicalDevice) DeviceCandidate {
     var chosen_one: DeviceCandidate = .{
         .pdev = .null_handle,
@@ -401,7 +283,7 @@ fn select_physical_device(arena: Allocator, instance: Instance, devices: []vk.Ph
             score += 1000;
 
         const propsv = instance.enumerateDeviceExtensionPropertiesAlloc(physical_device, null, arena) catch |err| {
-            vk_log.err("Unable to enumerate device extension properties. Error:: {s}", .{@errorName(err)});
+            log.err("Unable to enumerate device extension properties. Error:: {s}", .{@errorName(err)});
             continue;
         };
         defer arena.free(propsv);
@@ -436,18 +318,6 @@ fn select_physical_device(arena: Allocator, instance: Instance, devices: []vk.Ph
 
     return chosen_one;
 }
-
-pub const Queue = struct {
-    handle: vk.Queue,
-    family: u32,
-
-    fn init(device: Device, family: u32) Queue {
-        return .{
-            .handle = device.getDeviceQueue(family, 0),
-            .family = family,
-        };
-    }
-};
 
 pub fn create_pipelines(
     ctx: *GraphicsContext,
@@ -555,15 +425,321 @@ pub fn create_pipelines(
 }
 
 pub fn create_framebuffers(ctx: *GraphicsContext) !void {
-    ctx.framebuffers = ctx.arena.push(vk.Framebuffer, ctx.images.len);
+    ctx.framebuffers = ctx.arena.push(vk.Framebuffer, ctx.swapchain.images.len);
     for (ctx.framebuffers, 0..) |*framebuffer, idx| {
         framebuffer.* = try ctx.dev.wrapper.createFramebuffer(ctx.dev.handle, &.{
             .render_pass = ctx.render_pass,
             .attachment_count = 1,
-            .p_attachments = &[_]vk.ImageView{ctx.image_views[idx]},
+            .p_attachments = &[_]vk.ImageView{ctx.swapchain.image_views[idx]},
             .width = ctx.extent.width,
             .height = ctx.extent.height,
             .layers = ctx.extent.depth,
         }, null);
     }
 }
+
+pub fn create_swapchain(ctx: *GraphicsContext) !void {
+    _ = ctx;
+}
+
+const DeviceCandidate = struct {
+    pdev: vk.PhysicalDevice,
+    props: vk.PhysicalDeviceProperties,
+};
+
+pub const Queue = struct {
+    handle: vk.Queue,
+    family: u32,
+
+    fn init(device: Device, family: u32) Queue {
+        return .{
+            .handle = device.getDeviceQueue(family, 0),
+            .family = family,
+        };
+    }
+};
+
+pub const Swapchain = struct {
+    arena: *Arena,
+    client: *@"wl-client",
+    images: []vk.Image,
+    image_mem: []vk.DeviceMemory,
+    image_views: []vk.ImageView,
+    buffers: []wl.Buffer,
+    sync: Sync,
+    format: vk.Format,
+    extent: vk.Extent2D,
+    cur_image_idx: usize,
+
+    pub fn init(
+        arena: *Arena,
+        client: *@"wl-client",
+        instance: Instance,
+        device: Device,
+        pdev: vk.PhysicalDevice,
+        format: vk.Format,
+        extent: vk.Extent2D,
+        image_count: usize,
+    ) !*Swapchain {
+        const sc_ptr = arena.create(Swapchain);
+        sc_ptr.* = .{
+            .arena = arena,
+            .client = client,
+            .images = arena.push(vk.Image, image_count),
+            .image_mem = arena.push(vk.DeviceMemory, image_count),
+            .image_views = arena.push(vk.ImageView, image_count),
+            .buffers = arena.push(wl.Buffer, image_count),
+            .sync = undefined,
+            .format = format,
+            .extent = extent,
+            .cur_image_idx = 0,
+        };
+
+        for (0..image_count) |idx| {
+            // Create image
+            sc_ptr.images[idx] = try device.wrapper.createImage(device.handle, &.{
+                .flags = .{ .@"2d_view_compatible_bit_ext" = true },
+                .image_type = .@"2d",
+                .extent = .{
+                    .width = extent.width,
+                    .height = extent.height,
+                    .depth = 1,
+                },
+                .mip_levels = 1,
+                .array_layers = 1,
+                .format = format,
+                .tiling = .linear,
+                .initial_layout = .present_src_khr,
+                .usage = .{
+                    .transfer_src_bit = true,
+                    .color_attachment_bit = true,
+                },
+                .samples = .{ .@"1_bit" = true },
+                .sharing_mode = .exclusive,
+            }, null);
+
+            // create image view
+            sc_ptr.image_views[idx] = try device.wrapper.createImageView(device.handle, &.{
+                .view_type = .@"2d",
+                .image = sc_ptr.images[idx],
+                .format = format,
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+                .components = .{
+                    .r = .r,
+                    .g = .g,
+                    .b = .b,
+                    .a = .a,
+                },
+            }, null);
+
+            // Get Access to Image Memory
+            const mem_reqs = device.wrapper.getImageMemoryRequirements(device.handle, sc_ptr.images[idx]);
+
+            const mem_type: vk.MemoryType = mem_type: {
+                const pdev_mem_reqs = instance.wrapper.getPhysicalDeviceMemoryProperties(pdev);
+                var mem_idx: u32 = 0;
+                while (mem_idx < pdev_mem_reqs.memory_type_count) : (mem_idx += 1) {
+                    const mem_type_flags = pdev_mem_reqs.memory_types[idx].property_flags;
+                    if (mem_reqs.memory_type_bits & (@as(u6, 1) << @as(u3, @intCast(mem_idx))) != 0 and (mem_type_flags.host_coherent_bit and mem_type_flags.host_visible_bit)) {
+                        break :mem_type pdev_mem_reqs.memory_types[mem_idx];
+                    }
+                }
+
+                break :mem_type .{
+                    .property_flags = .{},
+                    .heap_index = 0,
+                };
+            };
+
+            sc_ptr.image_mem[idx] = try device.wrapper.allocateMemory(device.handle, &.{
+                .p_next = &vk.ExportMemoryAllocateInfo{
+                    .handle_types = .{
+                        .dma_buf_bit_ext = true,
+                        .host_allocation_bit_ext = true,
+                    },
+                },
+                .allocation_size = mem_reqs.size,
+                .memory_type_index = mem_type.heap_index,
+            }, null);
+
+            try device.wrapper.bindImageMemory(device.handle, sc_ptr.images[idx], sc_ptr.image_mem[idx], 0);
+
+            const fd = try device.wrapper.getMemoryFdKHR(device.handle, &.{
+                .memory = sc_ptr.image_mem[idx],
+                .handle_type = .{ .dma_buf_bit_ext = true },
+            });
+
+            sc_ptr.buffers[idx] = create_buffer(client, fd, .argb8888, extent);
+        }
+
+        try sc_ptr.init_sync(device, image_count);
+
+        return sc_ptr;
+    }
+
+    pub fn deinit(sc: *Swapchain, device: Device) void {
+        for (0..sc.images.len) |idx| {
+            device.destroySemaphore(sc.sync.image_available[idx], null);
+            device.destroySemaphore(sc.sync.render_finished[idx], null);
+            device.destroyFence(sc.sync.in_flight_fences[idx], null);
+
+            device.destroyImage(sc.images[idx], null);
+            device.destroyImageView(sc.image_views[idx], null);
+            sc.buffers[idx].destroy(sc.client.connection.writer(), .{});
+        }
+    }
+
+    pub fn acquire_next(sc: *Swapchain, device: Device) !usize {
+        // wait for prev frame's fence
+        _ = try device.wrapper.waitForFences(
+            device.handle,
+            1,
+            &.{sc.sync.in_flight_fences[sc.cur_image_idx]},
+            vk.TRUE,
+            std.math.maxInt(u64),
+        );
+
+        sc.cur_image_idx = (sc.cur_image_idx + 1) % sc.images.len;
+
+        // Wair for next image to be freed if still in flight
+        if (sc.sync.images_in_flight[sc.cur_image_idx]) |fence| {
+            _ = try device.wrapper.waitForFences(
+                device.handle,
+                1,
+                &.{fence},
+                vk.TRUE,
+                std.math.maxInt(u64),
+            );
+        }
+
+        try device.resetFences(
+            1,
+            &.{sc.sync.in_flight_fences[sc.cur_image_idx]},
+        );
+        sc.sync.images_in_flight[sc.cur_image_idx] = sc.sync.in_flight_fences[sc.cur_image_idx];
+
+        return sc.cur_image_idx;
+    }
+
+    pub fn present(sc: *Swapchain, writer: anytype, surface: wl.Surface) !void {
+        surface.attach(writer, .{
+            .buffer = sc.buffers[sc.cur_image_idx].id,
+            .x = 0,
+            .y = 0,
+        }) catch |err| {
+            log.err("wl_surface.attach() failed due to err :: {s}", .{@errorName(err)});
+            return err;
+        };
+
+        surface.damage_buffer(writer, .{
+            .x = 0,
+            .y = 0,
+            .width = @intCast(sc.extent.width),
+            .height = @intCast(sc.extent.height),
+        }) catch |err| {
+            log.err("wl_surface.damage_buffer() failed due to err :: {s}", .{@errorName(err)});
+            return err;
+        };
+
+        surface.commit(writer, .{}) catch |err| {
+            log.err("wl_surface.commit() failed due to err :: {s}", .{@errorName(err)});
+            return err;
+        };
+    }
+
+    fn init_sync(sc: *Swapchain, device: Device, count: usize) !void {
+        sc.sync = .{
+            .image_available = sc.arena.push(vk.Semaphore, count),
+            .render_finished = sc.arena.push(vk.Semaphore, count),
+            .in_flight_fences = sc.arena.push(vk.Fence, count),
+            .images_in_flight = sc.arena.push(?vk.Fence, count),
+        };
+
+        const semaphore_info: vk.SemaphoreCreateInfo = .{};
+        const fence_info: vk.FenceCreateInfo = .{
+            .flags = .{ .signaled_bit = true },
+        };
+
+        for (0..count) |idx| {
+            sc.sync.image_available[idx] = try device.createSemaphore(&semaphore_info, null);
+            sc.sync.render_finished[idx] = try device.createSemaphore(&semaphore_info, null);
+            sc.sync.in_flight_fences[idx] = try device.createFence(&fence_info, null);
+            sc.sync.images_in_flight[idx] = null;
+        }
+    }
+
+    fn create_buffer(
+        wl_client: *@"wl-client",
+        fd: std.posix.fd_t,
+        format: Drm.Format,
+        extent: vk.Extent2D,
+    ) wl.Buffer {
+        const writer = wl_client.connection.writer();
+        const dmabuf_params_opt = wl_client.dmabuf.create_params(writer, .{}) catch |err| nil: {
+            log.err("Failed to create linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
+            break :nil null;
+        };
+
+        const wl_buffer = if (dmabuf_params_opt) |dmabuf_params| buffer: {
+            log.debug("Creating wl_buffer :: fd = {d}", .{fd});
+            dmabuf_params.add(writer, .{
+                .fd = fd,
+                .plane_idx = 0,
+                .offset = 0,
+                .stride = @intCast(extent.width * 4),
+                .modifier_hi = Drm.Modifier.linear.hi(),
+                .modifier_lo = Drm.Modifier.linear.lo(),
+            }) catch |err| {
+                log.err("Failed to add data to linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
+                break :buffer null;
+            };
+
+            log.debug("Creating wl_buffer of dimensions :: {d}x{d}", .{
+                extent.width,
+                extent.height,
+            });
+            const wl_buffer = dmabuf_params.create_immed(writer, .{
+                .width = @intCast(extent.width),
+                .height = @intCast(extent.height),
+                .format = @intFromEnum(format),
+                .flags = .{},
+            }) catch |err| {
+                log.err("Failed to create wl_buffer due to err :: {s}", .{@errorName(err)});
+                break :buffer null;
+            };
+
+            dmabuf_params.destroy(writer, .{}) catch |err| {
+                log.err("Failed to destroy linux_dmabuf_params due to err :: {s}", .{@errorName(err)});
+            };
+
+            break :buffer wl_buffer;
+        } else buffer: {
+            break :buffer null;
+        };
+
+        if (wl_buffer) |buffer| return buffer else return .{ .id = 0 };
+    }
+
+    const Sync = struct {
+        image_available: []vk.Semaphore,
+        render_finished: []vk.Semaphore,
+        in_flight_fences: []vk.Fence,
+        images_in_flight: []?vk.Fence,
+    };
+};
+
+const wl = @import("generated/protocols.zig").wayland;
+const std = @import("std");
+const vk = @import("vulkan");
+const log = std.log.scoped(.vulkan);
+
+const Allocator = std.mem.Allocator;
+const Arena = @import("Arena.zig");
+const Drm = @import("Drm.zig");
+const @"wl-client" = @import("wl-client.zig");
