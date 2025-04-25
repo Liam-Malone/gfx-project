@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) !void {
 
     // END Wayland-Bindings
     const exe = b.addExecutable(.{
-        .name = "Gfx-Project",
+        .name = "Gfx",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,

@@ -1,9 +1,10 @@
 .{
-    .name = "Gfx-Project",
+    .name = .Gfx_Project,
     .version = "0.0.0",
+    .fingerprint = 0xf2127f1cc09cba88,
     .dependencies = .{
         .vulkan = .{
-            .path = "deps/vulkan-zig",
+            .path = "deps/vulkan",
             .lazy = true,
         },
     },

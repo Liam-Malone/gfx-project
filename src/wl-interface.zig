@@ -1,6 +1,7 @@
 const std = @import("std");
 const meta = std.meta;
 const protocols = @import("generated/protocols.zig");
+const Arena = @import("Arena.zig");
 
 const wl = protocols.wayland;
 const log = std.log.scoped(.@"wl-interface");
@@ -31,7 +32,7 @@ pub const Registry = struct {
         }
     };
 
-    const InterfaceEnum = blk: {
+    const ObjectTag = blk: {
         const enum_len = len_blk: {
             var decl_count: usize = 0;
             for (std.meta.declarations(protocols)) |protocol_decl| {
@@ -42,49 +43,105 @@ pub const Registry = struct {
             break :len_blk decl_count;
         };
 
-        var idx: u32 = 0;
-        var fields: [enum_len]std.builtin.Type.EnumField = undefined;
+        var idx: u32 = 1;
+        var fields: [enum_len + 1]std.builtin.Type.EnumField = undefined;
+
+        fields[0] = .{
+            .name = "nil",
+            .value = 0,
+        };
 
         for (std.meta.declarations(protocols)) |protocol_decl| {
             const protocol = @field(protocols, protocol_decl.name);
-            for (@typeInfo(meta.DeclEnum(protocol)).@"enum".fields) |interface_decl| {
+
+            for (std.meta.declarations(protocol)) |interface_decl| {
                 const interface = @field(protocol, interface_decl.name);
-                fields[idx] = .{ .name = interface.name ++ "", .value = idx };
+                fields[idx] = .{
+                    .name = @field(interface, "Name") ++ "",
+                    .value = idx,
+                };
                 idx += 1;
             }
         }
 
-        break :blk @Type(.{
+        const T = @Type(.{
             .@"enum" = .{
-                .tag_type = std.math.IntFittingRange(0, enum_len),
+                .tag_type = std.math.IntFittingRange(0, enum_len + 1),
                 .fields = &fields,
                 .decls = &.{},
                 .is_exhaustive = true,
             },
         });
+        break :blk T;
     };
 
-    const InterfaceMap = std.AutoHashMap(u32, InterfaceEnum);
+    pub const Object = blk: {
+        const union_len = len_blk: {
+            var decl_count: usize = 0;
+            for (std.meta.declarations(protocols)) |protocol_decl| {
+                const protocol = @field(protocols, protocol_decl.name);
+                const interfaces = meta.fields(meta.DeclEnum(protocol));
+                decl_count += interfaces.len;
+            }
+            break :len_blk decl_count;
+        };
+
+        var idx: u32 = 1;
+        var fields: [union_len + 1]std.builtin.Type.UnionField = undefined;
+
+        fields[0] = .{
+            .name = "nil",
+            .type = void,
+            .alignment = @alignOf(void),
+        };
+
+        for (std.meta.declarations(protocols)) |protocol_decl| {
+            const protocol = @field(protocols, protocol_decl.name);
+
+            for (@typeInfo(protocol).@"struct".decls) |interface_decl| {
+                const interface = @field(protocol, interface_decl.name);
+                fields[idx] = .{
+                    .name = @field(interface, "Name") ++ "",
+                    .type = interface,
+                    .alignment = @alignOf(interface),
+                };
+                idx += 1;
+            }
+        }
+
+        const T = @Type(.{
+            .@"union" = .{
+                .layout = .auto,
+                .tag_type = ObjectTag,
+                .fields = &fields,
+                .decls = &.{},
+            },
+        });
+        break :blk T;
+    };
 
     cur_idx: u32,
-    elems: InterfaceMap,
+    objects: []Object,
     registry: wl.Registry,
     free_list: IndexFreeQueue = .{},
 
-    pub fn init(arena: std.mem.Allocator, display: wl.Display) !Registry {
-        var map: InterfaceMap = .init(arena);
-
-        try map.put(1, meta.stringToEnum(InterfaceEnum, @TypeOf(display).name).?);
+    pub fn init(arena: *Arena, display: wl.Display) !Registry {
+        const objects = arena.push(Object, 256);
+        for (objects) |*obj| {
+            obj = .{ .nil = {} };
+        }
+        objects[1] = display;
 
         return .{
             .cur_idx = 2,
-            .elems = map,
             .registry = .{ .id = 2 },
+            .objects = objects,
         };
     }
+
     pub fn deinit(self: *Registry) void {
         log.warn("Interface Registry deinit not yet implemented", .{});
-        self.elems.deinit();
+        _ = self;
     }
 
     pub fn bind(self: *Registry, comptime T: type, writer: anytype, params: wl.Registry.Event.Global) !T {
@@ -101,17 +158,12 @@ pub const Registry = struct {
             .id_interface_version = params.version,
             .id = idx,
         });
+        self.objects[idx] = @unionInit(Object, @field(T, "Name"), .{ .id = idx });
 
         log.debug("Interface \"{s}\" bound with id :: {d}", .{ T.name, idx });
-        try self.elems.put(idx, meta.stringToEnum(InterfaceEnum, T.name).?);
         return .{
             .id = idx,
         };
-    }
-
-    pub fn insert(self: *Registry, id: u32, comptime T: type) !void {
-        self.cur_idx = id + 1;
-        try self.elems.put(id, meta.stringToEnum(InterfaceEnum, T.name).?);
     }
 
     pub fn register(self: *Registry, comptime T: type) !T {
@@ -122,19 +174,17 @@ pub const Registry = struct {
             break :blk self.cur_idx;
         };
 
-        try self.elems.put(idx, meta.stringToEnum(InterfaceEnum, T.name).?);
-        log.info("Registering object \"{s}\" with id :: {d}", .{ T.name, idx });
+        self.objects[idx] = @unionInit(Object, @field(T, "Name"), .{ .id = idx });
         return .{
             .id = idx,
         };
     }
 
-    pub fn get(self: *Registry, idx: u32) ?InterfaceEnum {
-        return self.elems.get(idx);
+    pub fn get(self: *Registry, idx: u32) Object {
+        return self.objects[idx];
     }
 
     pub fn remove(self: *Registry, obj: anytype) void {
-        log.debug("deleting object {s}#{d}", .{ @TypeOf(obj).name, obj.id });
         self.free_list.push(obj.id);
         _ = self.elems.remove(obj.id);
     }

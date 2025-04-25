@@ -14,9 +14,11 @@ pub const wayland = struct {
 
     /// core global object
     pub const Display = struct {
-        pub const name: [:0]const u8 = "wl_display";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_display";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
 
         /// global error values
@@ -116,9 +118,11 @@ pub const wayland = struct {
 
     /// global registry object
     pub const Registry = struct {
-        pub const name: [:0]const u8 = "wl_registry";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_registry";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
 
         pub const bind_params = struct {
@@ -170,9 +174,11 @@ pub const wayland = struct {
 
     /// callback object
     pub const Callback = struct {
-        pub const name: [:0]const u8 = "wl_callback";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_callback";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
         pub const Event = union(enum) {
             done: Event.Done,
@@ -195,9 +201,11 @@ pub const wayland = struct {
 
     /// the compositor singleton
     pub const Compositor = struct {
-        pub const name: [:0]const u8 = "wl_compositor";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_compositor";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 6;
 
-        version: u32 = 6,
         id: u32,
 
         pub const create_surface_params = struct {
@@ -259,9 +267,11 @@ pub const wayland = struct {
 
     /// a shared memory pool
     pub const ShmPool = struct {
-        pub const name: [:0]const u8 = "wl_shm_pool";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_shm_pool";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 2;
 
-        version: u32 = 2,
         id: u32,
 
         pub const create_buffer_params = struct {
@@ -334,9 +344,11 @@ pub const wayland = struct {
 
     /// shared memory support
     pub const Shm = struct {
-        pub const name: [:0]const u8 = "wl_shm";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_shm";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 2;
 
-        version: u32 = 2,
         id: u32,
 
         /// wl_shm error values
@@ -652,9 +664,11 @@ pub const wayland = struct {
 
     /// content for a wl_surface
     pub const Buffer = struct {
-        pub const name: [:0]const u8 = "wl_buffer";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_buffer";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
 
         pub const destroy_params = struct {
@@ -690,9 +704,11 @@ pub const wayland = struct {
 
     /// offer to transfer data
     pub const DataOffer = struct {
-        pub const name: [:0]const u8 = "wl_data_offer";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_data_offer";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 3;
 
-        version: u32 = 3,
         id: u32,
         pub const Error = enum(u32) {
             /// finish request was called untimely
@@ -817,9 +833,11 @@ pub const wayland = struct {
 
     /// offer to transfer data
     pub const DataSource = struct {
-        pub const name: [:0]const u8 = "wl_data_source";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_data_source";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 3;
 
-        version: u32 = 3,
         id: u32,
         pub const Error = enum(u32) {
             /// action mask contains invalid values
@@ -922,9 +940,11 @@ pub const wayland = struct {
 
     /// data transfer device
     pub const DataDevice = struct {
-        pub const name: [:0]const u8 = "wl_data_device";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_data_device";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 3;
 
-        version: u32 = 3,
         id: u32,
         pub const Error = enum(u32) {
             /// given wl_surface has another role
@@ -1042,9 +1062,11 @@ pub const wayland = struct {
 
     /// data transfer interface
     pub const DataDeviceManager = struct {
-        pub const name: [:0]const u8 = "wl_data_device_manager";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_data_device_manager";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 3;
 
-        version: u32 = 3,
         id: u32,
 
         /// drag and drop actions
@@ -1147,9 +1169,11 @@ pub const wayland = struct {
 
     /// create desktop-style surfaces
     pub const Shell = struct {
-        pub const name: [:0]const u8 = "wl_shell";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_shell";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
         pub const Error = enum(u32) {
             /// given wl_surface has another role
@@ -1188,9 +1212,11 @@ pub const wayland = struct {
 
     /// desktop-style metadata interface
     pub const ShellSurface = struct {
-        pub const name: [:0]const u8 = "wl_shell_surface";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_shell_surface";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
 
         /// edge values for resizing
@@ -1493,9 +1519,11 @@ pub const wayland = struct {
 
     /// an onscreen surface
     pub const Surface = struct {
-        pub const name: [:0]const u8 = "wl_surface";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_surface";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 6;
 
-        version: u32 = 6,
         id: u32,
 
         /// wl_surface error values
@@ -1746,9 +1774,11 @@ pub const wayland = struct {
 
     /// group of input devices
     pub const Seat = struct {
-        pub const name: [:0]const u8 = "wl_seat";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_seat";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 10;
 
-        version: u32 = 10,
         id: u32,
 
         /// seat capability bitmask
@@ -1920,9 +1950,11 @@ pub const wayland = struct {
 
     /// pointer input device
     pub const Pointer = struct {
-        pub const name: [:0]const u8 = "wl_pointer";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_pointer";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 10;
 
-        version: u32 = 10,
         id: u32,
         pub const Error = enum(u32) {
             /// given wl_surface has another role
@@ -2099,9 +2131,11 @@ pub const wayland = struct {
 
     /// keyboard input device
     pub const Keyboard = struct {
-        pub const name: [:0]const u8 = "wl_keyboard";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_keyboard";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 10;
 
-        version: u32 = 10,
         id: u32,
 
         /// keyboard mapping format
@@ -2203,9 +2237,11 @@ pub const wayland = struct {
 
     /// touchscreen input device
     pub const Touch = struct {
-        pub const name: [:0]const u8 = "wl_touch";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_touch";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 10;
 
-        version: u32 = 10,
         id: u32,
 
         pub const release_params = struct {
@@ -2294,9 +2330,11 @@ pub const wayland = struct {
 
     /// compositor output region
     pub const Output = struct {
-        pub const name: [:0]const u8 = "wl_output";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_output";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 4;
 
-        version: u32 = 4,
         id: u32,
 
         /// subpixel geometry information
@@ -2448,9 +2486,11 @@ pub const wayland = struct {
 
     /// region interface
     pub const Region = struct {
-        pub const name: [:0]const u8 = "wl_region";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_region";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
 
         pub const destroy_params = struct {
@@ -2512,9 +2552,11 @@ pub const wayland = struct {
 
     /// sub-surface compositing
     pub const Subcompositor = struct {
-        pub const name: [:0]const u8 = "wl_subcompositor";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_subcompositor";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
         pub const Error = enum(u32) {
             /// the to-be sub-surface is invalid
@@ -2571,9 +2613,11 @@ pub const wayland = struct {
 
     /// sub-surface interface to a wl_surface
     pub const Subsurface = struct {
-        pub const name: [:0]const u8 = "wl_subsurface";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "wl_subsurface";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
         pub const Error = enum(u32) {
             /// wl_surface is not a sibling or the parent
@@ -2699,9 +2743,11 @@ pub const xdg_shell = struct {
 
     /// create desktop-style surfaces
     pub const WmBase = struct {
-        pub const name: [:0]const u8 = "xdg_wm_base";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "xdg_wm_base";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 6;
 
-        version: u32 = 6,
         id: u32,
         pub const Error = enum(u32) {
             /// given wl_surface has another role
@@ -2824,9 +2870,11 @@ pub const xdg_shell = struct {
 
     /// child surface positioner
     pub const Positioner = struct {
-        pub const name: [:0]const u8 = "xdg_positioner";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "xdg_positioner";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 6;
 
-        version: u32 = 6,
         id: u32,
         pub const Error = enum(u32) {
             /// invalid input provided
@@ -3051,9 +3099,11 @@ pub const xdg_shell = struct {
 
     /// desktop user interface surface base interface
     pub const Surface = struct {
-        pub const name: [:0]const u8 = "xdg_surface";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "xdg_surface";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 6;
 
-        version: u32 = 6,
         id: u32,
         pub const Error = enum(u32) {
             /// Surface was not fully constructed
@@ -3192,9 +3242,11 @@ pub const xdg_shell = struct {
 
     /// toplevel surface
     pub const Toplevel = struct {
-        pub const name: [:0]const u8 = "xdg_toplevel";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "xdg_toplevel";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 6;
 
-        version: u32 = 6,
         id: u32,
         pub const Error = enum(u32) {
             /// provided value is not a valid variant of the resize_edge enum
@@ -3494,9 +3546,11 @@ pub const xdg_shell = struct {
 
     /// short-lived, popup surfaces for menus
     pub const Popup = struct {
-        pub const name: [:0]const u8 = "xdg_popup";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "xdg_popup";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 6;
 
-        version: u32 = 6,
         id: u32,
         pub const Error = enum(u32) {
             /// tried to grab after being mapped
@@ -3598,9 +3652,11 @@ pub const xdg_decoration_unstable_v1 = struct {
 
     /// window decoration manager
     pub const DecorationManagerV1 = struct {
-        pub const name: [:0]const u8 = "zxdg_decoration_manager_v1";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "zxdg_decoration_manager_v1";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
 
         pub const destroy_params = struct {
@@ -3648,9 +3704,11 @@ pub const xdg_decoration_unstable_v1 = struct {
 
     /// decoration object for a toplevel surface
     pub const ToplevelDecorationV1 = struct {
-        pub const name: [:0]const u8 = "zxdg_toplevel_decoration_v1";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "zxdg_toplevel_decoration_v1";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 1;
 
-        version: u32 = 1,
         id: u32,
         pub const Error = enum(u32) {
             /// xdg_toplevel has a buffer attached before configure
@@ -3742,9 +3800,11 @@ pub const linux_dmabuf_v1 = struct {
 
     /// factory for creating dmabuf-based wl_buffers
     pub const LinuxDmabufV1 = struct {
-        pub const name: [:0]const u8 = "zwp_linux_dmabuf_v1";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "zwp_linux_dmabuf_v1";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 5;
 
-        version: u32 = 5,
         id: u32,
 
         pub const destroy_params = struct {
@@ -3874,9 +3934,11 @@ pub const linux_dmabuf_v1 = struct {
 
     /// parameters for creating a dmabuf-based wl_buffer
     pub const LinuxBufferParamsV1 = struct {
-        pub const name: [:0]const u8 = "zwp_linux_buffer_params_v1";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "zwp_linux_buffer_params_v1";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 5;
 
-        version: u32 = 5,
         id: u32,
         pub const Error = enum(u32) {
             /// the dmabuf_batch object has already been used to create a wl_buffer
@@ -4055,9 +4117,11 @@ pub const linux_dmabuf_v1 = struct {
 
     /// dmabuf feedback
     pub const LinuxDmabufFeedbackV1 = struct {
-        pub const name: [:0]const u8 = "zwp_linux_dmabuf_feedback_v1";
+        // Actual advertised 'name' of interface
+        pub const Name: [:0]const u8 = "zwp_linux_dmabuf_feedback_v1";
+        // Version of interface this code was generated from
+        pub const Version: u32 = 5;
 
-        version: u32 = 5,
         id: u32,
         pub const TrancheFlags = packed struct(u32) {
             /// direct scan-out tranche

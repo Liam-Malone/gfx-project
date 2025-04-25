@@ -6,16 +6,13 @@ const interface = @import("wl-interface.zig");
 const GraphicsContext = @import("GraphicsContext.zig");
 const input = @import("input.zig");
 const SysEvent = @import("event.zig");
+const platform = @import("platform.zig");
 const xkb = @import("xkb.zig");
 const math = @import("math.zig");
 
 const BufCount = GraphicsContext.BufferCount;
 
 const protocols = @import("generated/protocols.zig");
-const wl = protocols.wayland;
-const xdg = protocols.xdg_shell;
-const dmab = protocols.linux_dmabuf_v1;
-const xdgd = protocols.xdg_decoration_unstable_v1;
 
 const msg = @import("wl-msg.zig");
 
@@ -64,6 +61,7 @@ pub const nil: Client = .{
 
     // Wayland event handling
     .ev_thread = undefined,
+    .callbacks = undefined,
     .sys_ev_queue = undefined,
 };
 
@@ -107,23 +105,26 @@ exit_key: input.Key,
 should_exit: bool = false,
 // Wayland event handling
 ev_thread: std.Thread,
+callbacks: std.ArrayList(CallbackEntry),
 sys_ev_queue: *SysEvent.Queue,
 
-pub var ev_iter: Event.iter(4096) = undefined;
+pub var ev_iter: EventIterator = undefined;
 
 pub fn init(arena: *Arena, sys_ev_queue: *SysEvent.Queue) *Client {
-    const alloc = arena.allocator();
+    const client_ptr = arena.create(Client);
     const connection = open_connection: {
+        const scratch = Thread.scratch_begin(1, &.{arena}).?;
+        defer scratch.end();
         const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return @constCast(&Client.nil);
         const wayland_display = std.posix.getenv("WAYLAND_DISPLAY") orelse return @constCast(&Client.nil);
 
-        const sock_path = std.mem.join(alloc, "/", &[_][]const u8{ xdg_runtime_dir, wayland_display }) catch return @constCast(&Client.nil);
+        const sock_path = std.mem.join(scratch.arena, "/", &[_][]const u8{ xdg_runtime_dir, wayland_display }) catch return @constCast(&Client.nil);
         break :open_connection std.net.connectUnixSocket(sock_path) catch return @constCast(&Client.nil);
     };
     const connection_writer = connection.writer();
 
     const display: wl.Display = .{ .id = 1 };
-    interface.registry = interface.Registry.init(alloc, display) catch return @constCast(&Client.nil);
+    interface.registry = interface.Registry.init(arena, display) catch return @constCast(&Client.nil);
     _ = display.get_registry(connection_writer, .{}) catch return @constCast(&Client.nil);
 
     var compositor_opt: ?wl.Compositor = null;
@@ -132,11 +133,7 @@ pub fn init(arena: *Arena, sys_ev_queue: *SysEvent.Queue) *Client {
     var decorations_opt: ?xdgd.DecorationManagerV1 = null;
     var dmabuf_opt: ?dmab.LinuxDmabufV1 = null;
 
-    ev_iter = .init(connection);
-    ev_iter.load_events() catch |err| {
-        log.err("Failed to load wayland events with err :: {s}", .{@errorName(err)});
-        return @constCast(&Client.nil);
-    };
+    ev_iter = .init(client_ptr, connection);
 
     // Bind interfaces
     while (ev_iter.next() catch return @constCast(&Client.nil)) |ev| {
@@ -215,7 +212,6 @@ pub fn init(arena: *Arena, sys_ev_queue: *SysEvent.Queue) *Client {
         return @constCast(&Client.nil);
     };
 
-    const client_ptr = arena.create(Client);
     client_ptr.* = .{
         // Arena
         .arena = arena,
@@ -254,6 +250,7 @@ pub fn init(arena: *Arena, sys_ev_queue: *SysEvent.Queue) *Client {
 
         // Event-Handling
         .ev_thread = undefined,
+        .callbacks = .init(arena.allocator()),
         .sys_ev_queue = sys_ev_queue,
     };
 
@@ -275,7 +272,7 @@ pub fn init(arena: *Arena, sys_ev_queue: *SysEvent.Queue) *Client {
     };
     client_ptr.surfaces = surfaces;
 
-    const ev_thread = std.Thread.spawn(.{}, ev_handle_thread, .{client_ptr}) catch |err| {
+    const ev_thread = Thread.spawn(.{}, ev_handle_thread, .{client_ptr}) catch |err| {
         log.err("Wayland Event Thread Spawn Failed :: {s}", .{@errorName(err)});
         return @constCast(&Client.nil);
     };
@@ -359,7 +356,8 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
                 if (action_opt) |action|
                     switch (action) {
                         .done => |cb| {
-                            log.debug("wl_callback :: received for object :: {d}", .{cb.callback_data});
+                            const entry = client.callbacks.items[0];
+                            @call(.auto, entry.listener.done, .{ entry.data, entry.callback, @as(i64, @intCast(cb.callback_data)) });
                         },
                     }
                 else
@@ -369,9 +367,7 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
                 const action_opt = wl.Display.Event.parse(ev.header.op, ev.data) catch null;
                 if (action_opt) |action|
                     switch (action) {
-                        .delete_id => |del_id| {
-                            log.warn("Compositor acknowledged deletion of ID {d}", .{del_id.id});
-                        },
+                        .delete_id => {},
                         .@"error" => |err| {
                             log.err("wl_display::error => object id: {d}, code: {d}, msg: {s}", .{
                                 err.object_id,
@@ -644,6 +640,7 @@ fn handle_event(client: *Client, ev_builder: *SysEvent) !void {
                                     client.format_mod_pairs[cur_idx] = .{ .format = format, .modifier = modifier };
                                 }
 
+                                // TODO: Actual
                                 client.gfx_format = .abgr8888;
                             }
                         },
@@ -694,12 +691,319 @@ pub fn remove_surface(client: *Client, buf_id: u32) void {
     _ = client.surfaces.orderedRemove(buf_id);
 }
 
+pub fn callback_destroy(client: *Client, cb: *wl.Callback) void {
+    _ = client.callbacks.orderedRemove(0);
+    client.registry.remove(cb.*);
+}
+pub fn callback_add_listener(client: *Client, cb: *wl.Callback, listener: *const CallbackListener, data: *anyopaque) !void {
+    try client.callbacks.append(.{ .listener = listener, .callback = cb, .data = data });
+}
+
+const CallbackEntry = struct {
+    listener: *const CallbackListener,
+    callback: *wl.Callback,
+    data: *anyopaque,
+};
+
+pub const CallbackListener = struct {
+    done: *const fn (data: *anyopaque, callback: *wl.Callback, milli_time: i64) void,
+};
+
 const FormatModPair = struct {
     format: Drm.Format,
     modifier: Drm.Modifier,
 };
 
-const Event = struct {
+const WireEvent = struct {
+    header: msg.Header,
+    data: []const u8,
+};
+
+pub const ObjectEventTag = blk: {
+    const enum_len = len_blk: {
+        var decl_count: usize = 0;
+        for (@typeInfo(protocols).@"struct".decls) |protocol_decl| {
+            const protocol = @field(protocols, protocol_decl.name);
+            for (@typeInfo(protocol).@"struct".decls) |interface_decl| {
+                const wl_interface = @field(protocol, interface_decl.name);
+                if (@hasDecl(wl_interface, "Event")) {
+                    decl_count += 1;
+                }
+            }
+        }
+        break :len_blk decl_count;
+    };
+
+    var idx: u32 = 1;
+    var fields: [enum_len + 1]std.builtin.Type.EnumField = undefined;
+
+    fields[0] = .{
+        .name = "wire_event",
+        .value = 0,
+    };
+
+    for (std.meta.declarations(protocols)) |protocol_decl| {
+        const protocol = @field(protocols, protocol_decl.name);
+
+        for (std.meta.declarations(protocol)) |interface_decl| {
+            const wl_interface = @field(protocol, interface_decl.name);
+            if (@hasDecl(wl_interface, "Event")) {
+                fields[idx] = .{
+                    .name = @field(interface, "Name") ++ "",
+                    .value = idx,
+                };
+                idx += 1;
+            }
+        }
+    }
+
+    const T = @Type(.{
+        .@"enum" = .{
+            .tag_type = std.math.IntFittingRange(0, enum_len + 1),
+            .fields = &fields,
+            .decls = &.{},
+            .is_exhaustive = true,
+        },
+    });
+    break :blk T;
+};
+
+const Event = blk: {
+    const union_len = len_blk: {
+        var decl_count: usize = 0;
+        for (std.meta.declarations(protocols)) |protocol_decl| {
+            const protocol = @field(protocols, protocol_decl.name);
+
+            for (@typeInfo(protocol).@"struct".decls) |interface_decl| {
+                const wl_interface = @field(protocol, interface_decl.name);
+                if (@hasDecl(wl_interface, "Event")) {
+                    decl_count += 1;
+                }
+            }
+        }
+        break :len_blk decl_count;
+    };
+
+    var idx: u32 = 1;
+    var fields: [union_len + 1]std.builtin.Type.UnionField = undefined;
+
+    fields[0] = .{
+        .name = "wire_event",
+        .type = WireEvent,
+        .alignment = @alignOf(WireEvent),
+    };
+
+    for (std.meta.declarations(protocols)) |protocol_decl| {
+        const protocol = @field(protocols, protocol_decl.name);
+
+        for (@typeInfo(protocol).@"struct".decls) |interface_decl| {
+            const wl_interface = @field(protocol, interface_decl.name);
+            if (@hasDecl(wl_interface, "Event")) {
+                fields[idx] = .{
+                    .name = @field(interface, "Name") ++ "",
+                    .type = @field(interface, "Event"),
+                    .alignment = @alignOf(@field(interface, "Event")),
+                };
+                idx += 1;
+            }
+        }
+    }
+
+    const T = @Type(.{
+        .@"union" = .{
+            .layout = .auto,
+            .tag_type = ObjectEventTag,
+            .fields = &fields,
+            .decls = &.{},
+        },
+    });
+    break :blk T;
+};
+
+pub const EventIterator = struct {
+    client: *Client,
+    socket: std.posix.socket_t,
+    buf: []Event,
+    read: u32,
+    write: u32,
+    ev_queue: EvQueue,
+    fd_queue: FdQueue,
+    read_buffer: RingBuffer,
+
+    pub fn init(arena: *Arena, socket: std.posix.socket_t, size: u32) EventIterator {
+        return .{
+            .socket = socket,
+            .client = *Client,
+            .buf = arena.push(Event, size),
+            .read = 0,
+            .write = 0,
+            .fd_queue = .{},
+            .read_buffer = arena.push(u8, 2048),
+        };
+    }
+
+    pub fn next(noalias iter: *EventIterator) !?Event {
+        if (iter.ev_queue.first()) |event| {
+            return event;
+        } else {
+            var cmsg_buf: [fd_cmsg.Size * 12]u8 = undefined;
+
+            var iov = [_]std.posix.iovec{
+                .{
+                    .base = iter.read_buffer.ptr,
+                    .len = iter.read_buffer.len,
+                },
+            };
+
+            var message: std.posix.msghdr = .{
+                .name = null,
+                .namelen = 0,
+                .iov = &iov,
+                .iovlen = 1,
+                .control = &cmsg_buf,
+                .controllen = cmsg_buf.len,
+                .flags = 0,
+            };
+
+            const rc = std.os.linux.recvmsg(iter.socket, &message, std.os.linux.MSG.DONTWAIT);
+            if (std.posix.errno(rc) == .SUCCESS) {
+                // check for file descriptors
+                {
+                    const cmsg_size = fd_cmsg.Size;
+                    var offset: usize = 0;
+                    while (offset + cmsg_size <= message.controllen) {
+                        const ctrl_buf: [*]u8 = @ptrCast(message.control.?);
+                        const ctrl_msg: *align(1) fd_cmsg = @ptrCast(@alignCast(ctrl_buf[offset..][0..fd_cmsg.Size]));
+
+                        if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == SCM_RIGHTS) {
+                            iter.fd_queue.push(ctrl_msg.data);
+                        }
+                    }
+                    offset += 1;
+                }
+
+                // standard event handling
+                {
+                    var header_buf: [@sizeOf(msg.Header)]u8 = @splat(0);
+                    while (true) {
+                        const scratch = Thread.scratch_begin(0, &.{}).?;
+                        defer scratch.end();
+
+                        iter.read_buffer.readBytes(&header_buf) catch break;
+                        const header: *const msg.Header = @alignCast(@ptrCast(&header_buf));
+
+                        var data_buf = scratch.arena.push(u8, header.msg_size);
+
+                        iter.read_buffer.readBytes(&data_buf) catch {
+                            log.err("Read Header, but failed to read data", .{});
+                            break;
+                        };
+
+                        @panic("TODO: Resolve event type from registry");
+                        // Take type given by registry when querying with header ID
+                        // Use type to infer correct event parse function
+                    }
+                }
+            } else {
+                return error.SocketClosed;
+            }
+        }
+    }
+
+    const EvQueue = struct {
+        data: [Size]Event = undefined,
+        read: usize = 0,
+        write: usize = 0,
+
+        pub fn push(noalias queue: *FdQueue, event: Event) void {
+            const write_idx = queue.write % queue.data.len;
+            queue.data[write_idx] = event;
+            write_idx += 1;
+        }
+
+        pub fn first(noalias queue: *FdQueue) ?Event {
+            if (queue.read != queue.write) {
+                defer queue.read += 1;
+
+                const read_idx = queue.read % queue.data.len;
+                return queue.data[read_idx];
+            } else {
+                return null;
+            }
+        }
+
+        pub const Size = 64;
+    };
+
+    const FdQueue = struct {
+        data: [Size]std.posix.fd_t = @splat(0),
+        read: usize = 0,
+        write: usize = 0,
+
+        pub fn push(noalias queue: *FdQueue, fd: std.posix.fd_t) void {
+            const write_idx = queue.write % queue.data.len;
+            queue.data[write_idx] = fd;
+            write_idx += 1;
+        }
+
+        pub fn first(noalias queue: *FdQueue) ?std.posix.fd_t {
+            if (queue.read != queue.write) {
+                defer queue.read += 1;
+
+                const read_idx = queue.read % queue.data.len;
+                return queue.data[read_idx];
+            } else {
+                return null;
+            }
+        }
+
+        pub const Size = 64;
+    };
+
+    const RingBuffer = struct {
+        buf: []u8,
+        read: usize,
+        write: usize,
+
+        pub fn init(buf: []u8) RingBuffer {
+            return .{
+                .buf = buf,
+                .read = 0,
+                .write = 0,
+            };
+        }
+
+        pub fn push(noalias rb: *RingBuffer, byte: u8) void {
+            defer rb.write += 1;
+
+            const write_idx = rb.write % rb.buf.len;
+            rb.buf[write_idx] = byte;
+        }
+
+        pub fn readBytes(noalias rb: *RingBuffer, buf: []u8) !void {
+            if (buf.len > rb.buf.len) {
+                return error.RequestedNLargerThanData;
+            }
+            if (rb.read + buf.len >= rb.write) {
+                return error.AttempToReadUnwrittenData;
+            }
+
+            var count: usize = 0;
+            while (count < buf.len) : (count += 1) {
+                defer rb.read += 1;
+
+                const read_idx = rb.read % rb.buf.len;
+                buf[count] = read_idx;
+            }
+        }
+    };
+
+    const cmsg = msg.cmsg;
+    const fd_cmsg = cmsg(std.posix.fd_t);
+    const SCM_RIGHTS = 0x01;
+};
+
+const OldEvent = struct {
     header: msg.Header,
     data: []const u8,
 
@@ -896,8 +1200,6 @@ const Event = struct {
     }
 };
 
-const Vec2F32 = math.Vec2F32;
-const Vec2I32 = math.Vec2I32;
 pub const Surface = struct {
     pub const Flags = packed struct {
         acked: bool = false,
@@ -915,9 +1217,9 @@ pub const Surface = struct {
     toplevel: xdg.Toplevel,
     decorations: xdgd.ToplevelDecorationV1,
     cur_buf: usize,
-    dims: Vec2I32,
-    pos: Vec2I32,
-    mouse_pos: Vec2F32 = .zero,
+    dims: Vec2i32,
+    pos: Vec2i32,
+    mouse_pos: Vec2f32 = .zero,
     fps_target: i32 = 60,
 
     pub const nil: Surface = .{
@@ -943,8 +1245,8 @@ pub const Surface = struct {
         compositor: wl.Compositor,
         wm_base: xdg.WmBase,
         decoration_manager: xdgd.DecorationManagerV1,
-        dims: ?Vec2I32 = null,
-        pos: ?Vec2I32 = null,
+        dims: ?Vec2i32 = null,
+        pos: ?Vec2i32 = null,
         fps_target: ?i32 = null,
     };
 
@@ -1101,3 +1403,13 @@ test "Event Iter" {
     try testing.expect(sim_ev.eql(&ev));
     try testing.expect(!sim_ev.eql(&nil_ev));
 }
+
+const Thread = platform.Thread;
+const Context = platform.Context;
+const Vec2f32 = math.Vec2f32;
+const Vec2i32 = math.Vec2i32;
+
+const wl = protocols.wayland;
+const xdg = protocols.xdg_shell;
+const dmab = protocols.linux_dmabuf_v1;
+const xdgd = protocols.xdg_decoration_unstable_v1;

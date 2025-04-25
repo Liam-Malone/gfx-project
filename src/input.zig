@@ -155,6 +155,7 @@ pub const Key = enum(u32) {
     Hiragana_Katakana,
     Muhenkan,
     KP_Enter,
+    KP_Add,
     Control_R,
 
     KP_Divide,

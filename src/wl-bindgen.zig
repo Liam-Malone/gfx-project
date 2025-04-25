@@ -100,9 +100,11 @@ pub fn generate(allocator: Allocator, spec_xml: []const u8, writer: anytype) !vo
             // ------------------------ BEGIN INTERFACE ------------------------
             try writer.print(
                 \\pub const {s} = struct {{
-                \\    pub const name: [:0]const u8 = "{s}";
+                \\    // Actual advertised 'name' of interface
+                \\    pub const Name: [:0]const u8 = "{s}";
+                \\    // Version of interface this code was generated from
+                \\    pub const Version: u32 = {s};
                 \\
-                \\    version: u32 = {s},
                 \\    id: u32,
                 \\
             ,
@@ -204,6 +206,7 @@ pub fn generate(allocator: Allocator, spec_xml: []const u8, writer: anytype) !vo
                         }
                         if (arg_type == .new_id and arg_interface_opt == null) {
                             try writer.print(
+                                \\
                                 \\        {s}_interface: [:0]const u8,
                                 \\        {s}_interface_version: u32,
                                 \\
@@ -247,6 +250,7 @@ pub fn generate(allocator: Allocator, spec_xml: []const u8, writer: anytype) !vo
 
                 if (req.getAttribute("type")) |_| { // only appears with destructors
                     try writer.print(
+                        \\
                         \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params,) !void {{
                         \\        try msg.write(writer, @TypeOf(params), params, self.id);
                         \\        interface.registry.remove(self.*);
@@ -260,6 +264,7 @@ pub fn generate(allocator: Allocator, spec_xml: []const u8, writer: anytype) !vo
                     });
                 } else if (req_interface_opt) |interface_t| {
                     try writer.print(
+                        \\
                         \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params,) !{s} {{
                         \\        const res_id = init: {{
                         \\            if (params.{s}) |id| {{
@@ -291,6 +296,7 @@ pub fn generate(allocator: Allocator, spec_xml: []const u8, writer: anytype) !vo
                     });
                 } else {
                     try writer.print(
+                        \\
                         \\    pub fn {s}(self: *const {s}, writer: anytype, params: {s}_params,) !void {{
                         \\        try msg.write(writer, @TypeOf(params), params, self.id);
                         \\    }}

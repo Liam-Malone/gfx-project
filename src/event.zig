@@ -25,16 +25,16 @@ const Surface = struct {
 
     const Type = union(enum) {
         close: void,
-        fullscreen: Vec2I32,
-        resize: Vec2I32,
+        fullscreen: Vec2i32,
+        resize: Vec2i32,
     };
 };
 
 type: Type,
 mouse_button: input.MouseButton,
 mouse_button_state: input.MouseButton.State,
-mouse_pos_prev: Vec2F32,
-mouse_pos_new: Vec2F32,
+mouse_pos_prev: Vec2f32,
+mouse_pos_new: Vec2f32,
 key: input.Key,
 key_state: input.Key.State,
 surface: Surface,
@@ -92,5 +92,5 @@ pub const Queue = struct {
 };
 
 const math = @import("math.zig");
-const Vec2F32 = math.Vec2F32;
-const Vec2I32 = math.Vec2I32;
+const Vec2f32 = math.Vec2f32;
+const Vec2i32 = math.Vec2i32;

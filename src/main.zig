@@ -4,6 +4,7 @@ const vk = @import("vulkan");
 const Drm = @import("Drm.zig");
 const Event = @import("event.zig");
 const input = @import("input.zig");
+const platform = @import("platform.zig");
 
 const GraphicsContext = @import("GraphicsContext.zig");
 const Arena = @import("Arena.zig");
@@ -14,14 +15,16 @@ const dmab = protocols.linux_dmabuf_v1;
 
 const log = std.log.scoped(.app);
 
-// TODO: Remove all `try` usage from main()
 pub fn main() !void {
+    Thread.ctx = .init();
+
     const return_val: void = exit: {
         var arena: *Arena = .init(.default);
         defer arena.release();
 
         const ev_queue: *Event.Queue = arena.create(Event.Queue);
         ev_queue.* = .init(arena.push(Event, 2048));
+
         // Creating application state
         var state: State = state: {
             const client: *Client = .init(.init(.default), ev_queue);
@@ -81,7 +84,7 @@ pub fn main() !void {
 
             var graphics_context = GraphicsContext.init(
                 arena,
-                state.client,
+                focused_surface,
                 "Simple Window",
                 .{
                     .width = screen_width,
@@ -109,7 +112,16 @@ pub fn main() !void {
             }, null) catch |err| break :exit err;
             defer vk_dev.destroyShaderModule(frag, null);
 
-            const pipeline_create_res = graphics_context.create_pipelines(&[_]vk.ShaderModule{ vert, frag }, &[_][*:0]const u8{ "main", "main" }) catch |err| break :exit err;
+            const pipeline_create_res = graphics_context.create_pipelines(
+                &[_]vk.ShaderModule{
+                    vert,
+                    frag,
+                },
+                &[_][*:0]const u8{
+                    "main",
+                    "main",
+                },
+            ) catch |err| break :exit err;
             _ = pipeline_create_res;
 
             graphics_context.create_framebuffers() catch |err| {
@@ -201,103 +213,203 @@ pub fn main() !void {
 
 fn draw_thread(state: *State) void {
     var ctx: DrawContext = .{
+        .state = state,
         .red_val = 0.1,
+        .gre_val = 0.3,
         .blu_val = 0.3,
-        .gre_val = 0.1,
         .step = 0.01,
-        .idx = 0,
         .swapchain = state.graphics_context.swapchain,
         .prev_time = std.time.milliTimestamp(),
+        .frame_ready = false,
+    };
+
+    const focused_surface = state.client.surfaces.items[state.client.focused_surface];
+    var cb = focused_surface.wl_surface.frame(state.client.connection.writer(), .{}) catch |err| {
+        log.err("failed to register callback object for frame with err :: {s}", .{@errorName(err)});
+        state.client.should_exit = true;
+        return;
+    };
+
+    focused_surface.wl_surface.attach(state.client.connection.writer(), .{
+        .buffer = ctx.swapchain.buffers[0].id,
+        .x = 0,
+        .y = 0,
+    }) catch return;
+
+    focused_surface.wl_surface.commit(state.client.connection.writer(), .{}) catch return;
+
+    state.client.callback_add_listener(&cb, &frame_listener, @ptrCast(&ctx)) catch {
+        state.client.should_exit = true;
     };
 
     // main render loop
     while (!state.client.should_exit and state.client.socket != -1) {
-        draw(state, &ctx) catch |err| {
-            log.err("Draw thread encountered fatal error :: {s}", .{@errorName(err)});
-            state.client.should_exit = true;
-        };
+        if (ctx.frame_ready)
+            draw(&ctx) catch |err| {
+                log.err("Draw thread encountered fatal error :: {s}", .{@errorName(err)});
+                state.client.should_exit = true;
+            }
+        else
+            std.time.sleep(1 * std.time.ns_per_ms);
     }
     log.debug("Draw thread has completed execution", .{});
 }
 
-fn draw(state: *State, ctx: *DrawContext) !void {
-    const focused_surface = state.client.surfaces.items[state.client.focused_surface];
+const frame_listener: Client.CallbackListener = .{
+    .done = frame_callback,
+};
 
-    const time = std.time.milliTimestamp();
+fn frame_callback(data: *anyopaque, cb: *protocols.wayland.Callback, time_milli: i64) void {
+    const ctx: *DrawContext = @ptrCast(@alignCast(data));
 
+    const state = ctx.state;
+    const focused_surface = ctx.swapchain.surface;
+    const writer = state.client.connection.writer();
+
+    ctx.frame_ready = true;
+    state.client.callback_destroy(cb);
+
+    ctx.prev_time = time_milli;
     if (!state.client.should_exit) {
-        if (time - ctx.prev_time > @divFloor(std.time.ms_per_s, state.fps_target)) {
-            ctx.prev_time = time;
-
-            ctx.red_val -= ctx.step;
-            ctx.blu_val += ctx.step;
-            ctx.gre_val -= ctx.step;
-            if (ctx.red_val >= 1.0 or ctx.red_val <= 0.0)
-                ctx.step = -ctx.step;
-
-            const vk_dev = state.graphics_context.dev;
-            try vk_dev.wrapper.queueWaitIdle(state.graphics_context.graphics_queue.handle);
-
-            const cmd_buf = &state.graphics_context.cmd_bufs[ctx.idx];
-            const graphics_queue = state.graphics_context.graphics_queue;
-
-            const clear_value = [_]vk.ClearValue{
-                .{
-                    .color = .{
-                        .float_32 = [_]f32{ ctx.red_val, ctx.gre_val, ctx.blu_val, 1.0 },
-                    },
-                },
-            };
-
-            try vk_dev.wrapper.beginCommandBuffer(cmd_buf.*, &.{
-                .flags = .{},
-            });
-
-            vk_dev.wrapper.cmdBeginRenderPass(cmd_buf.*, &.{
-                .render_pass = state.graphics_context.render_pass,
-                .framebuffer = state.graphics_context.framebuffers[ctx.idx],
-                .render_area = .{
-                    .offset = .{
-                        .x = 0,
-                        .y = 0,
-                    },
-                    .extent = .{
-                        .width = @intCast(focused_surface.dims.x),
-                        .height = @intCast(focused_surface.dims.y),
-                    },
-                },
-                .clear_value_count = 1,
-                .p_clear_values = &clear_value,
-            }, .@"inline");
-
-            vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
-            try vk_dev.wrapper.endCommandBuffer(cmd_buf.*);
-
-            try vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &[_]vk.SubmitInfo{
-                .{
-                    .command_buffer_count = 1,
-                    .p_command_buffers = &.{cmd_buf.*},
-                },
-            }, ctx.swapchain.sync.in_flight_fences[ctx.idx]);
-
-            // Present & prep next image
-            try ctx.swapchain.present(state.client.connection.writer(), focused_surface.wl_surface);
-            // ctx.idx = try ctx.swapchain.acquire_next(state.graphics_context.dev);
-        } else {
-            const fps_delay = @divFloor(std.time.ms_per_s, state.fps_target) - (time - ctx.prev_time);
-            std.time.sleep(@intCast(fps_delay * std.time.ns_per_ms));
-        }
+        cb.* = focused_surface.wl_surface.frame(writer, .{}) catch |err| {
+            log.err("failed to register frame callback due to err :: {s}", .{@errorName(err)});
+            state.client.should_exit = true;
+            return;
+        };
+        state.client.callback_add_listener(cb, &frame_listener, ctx) catch {
+            state.client.should_exit = true;
+            return;
+        };
     }
 }
 
+var vertex_buffer: ?vk.Buffer = null;
+fn draw(ctx: *DrawContext) !void {
+    ctx.frame_ready = false;
+
+    const state = ctx.state;
+    const sc = ctx.swapchain;
+    const focused_surface = state.client.surfaces.items[state.client.focused_surface];
+
+    const vertices = [_]Vertex{
+        .{
+            .pos = [_]f32{ 0, -0.5 },
+            .col = [_]f32{ 1, 0, 0 },
+        },
+        .{
+            .pos = [_]f32{ 0.5, 0.5 },
+            .col = [_]f32{ 0, 1, 0 },
+        },
+        .{
+            .pos = [_]f32{ -0.5, -0.5 },
+            .col = [_]f32{ 0, 0, 1 },
+        },
+    };
+    _ = vertices;
+
+    if (!state.client.should_exit) {
+        const vk_dev = state.graphics_context.dev;
+        try vk_dev.wrapper.queueWaitIdle(state.graphics_context.graphics_queue.handle);
+
+        // if (vertex_buffer == null) {
+        //     vertex_buffer = try vk_dev.createBuffer(&.{
+        //         .size = @sizeOf(@TypeOf(Vertex)),
+        //         .usage = .{ .transfer_dst_bit = true, .vertex_buffer_bit = true },
+        //         .sharing_mode = .exclusive,
+        //     }, null);
+
+        //     const mem_reqs = vk_dev.getBufferMemoryRequirements(vertex_buffer.?);
+        //     _ = mem_reqs;
+        //     const mem_props = state.graphics_context.instance.getPhysicalDeviceMemoryProperties(state.graphics_context.pdev);
+        //     const mem_type = blk: {
+        //         for (mem_props, 0..) |prop, idx| {
+        //             _ = idx;
+        //             break :blk prop;
+        //         }
+        //     };
+        //     _ = mem_type;
+        // }
+
+        const cmd_buf = &state.graphics_context.cmd_bufs[sc.idx];
+        const graphics_queue = state.graphics_context.graphics_queue;
+
+        const clear_value = [_]vk.ClearValue{
+            .{
+                .color = .{
+                    .float_32 = [_]f32{ ctx.red_val, ctx.gre_val, ctx.blu_val, 1.0 },
+                },
+            },
+        };
+
+        try vk_dev.wrapper.beginCommandBuffer(cmd_buf.*, &.{
+            .flags = .{},
+        });
+
+        vk_dev.wrapper.cmdBeginRenderPass(cmd_buf.*, &.{
+            .render_pass = state.graphics_context.render_pass,
+            .framebuffer = state.graphics_context.framebuffers[sc.idx],
+            .render_area = .{
+                .offset = .{
+                    .x = 0,
+                    .y = 0,
+                },
+                .extent = sc.extent,
+            },
+            .clear_value_count = 1,
+            .p_clear_values = &clear_value,
+        }, .@"inline");
+
+        vk_dev.wrapper.cmdEndRenderPass(cmd_buf.*);
+        try vk_dev.wrapper.endCommandBuffer(cmd_buf.*);
+
+        try vk_dev.wrapper.queueSubmit(graphics_queue.handle, 1, &.{
+            .{
+                .command_buffer_count = 1,
+                .p_command_buffers = &.{cmd_buf.*},
+            },
+        }, sc.sync.in_flight_fences[sc.idx]);
+
+        // Present & prep next image
+        try sc.present(state.client.connection.writer(), focused_surface.wl_surface);
+        sc.idx = try sc.next_image(state.graphics_context.dev);
+    }
+}
+
+const Vertex = struct {
+    const binding_description = vk.VertexInputBindingDescription{
+        .binding = 0,
+        .stride = @sizeOf(Vertex),
+        .input_rate = .vertex,
+    };
+
+    const attribute_description = [_]vk.VertexInputAttributeDescription{
+        .{
+            .binding = 0,
+            .location = 0,
+            .format = .r32g32_sfloat,
+            .offset = @offsetOf(Vertex, "pos"),
+        },
+        .{
+            .binding = 0,
+            .location = 1,
+            .format = .r32g32b32_sfloat,
+            .offset = @offsetOf(Vertex, "color"),
+        },
+    };
+
+    pos: [2]f32,
+    col: [3]f32,
+};
+
 const DrawContext = struct {
+    state: *State,
     red_val: f32,
-    blu_val: f32,
     gre_val: f32,
+    blu_val: f32,
     step: f32,
-    idx: usize,
     swapchain: *GraphicsContext.Swapchain,
     prev_time: i64,
+    frame_ready: bool,
 };
 
 const State = struct {
@@ -329,3 +441,6 @@ test "Arena" {
 test "Wayland Client Tests" {
     _ = Client;
 }
+
+const Thread = platform.Thread;
+const Context = platform.Context;
