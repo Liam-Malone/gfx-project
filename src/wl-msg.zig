@@ -7,6 +7,7 @@ const f32_size = @sizeOf(f32);
 const buf_align = u32_size;
 const str_len_size = buf_align;
 const SCM_RIGHTS = 0x01;
+const SCM_CREDENTIALS = 0x02;
 
 /// Wayland Wire Communication Header
 ///
@@ -233,8 +234,10 @@ fn write_float(writer: anytype, float: f32) !void {
 
 fn write_control_msg(sock: std.posix.socket_t, msg_bytes: []const u8, fd: std.posix.fd_t) !void {
     const control_msg: cmsg(@TypeOf(fd)) = .{
-        .level = std.posix.SOL.SOCKET,
-        .type = SCM_RIGHTS,
+        .header = .{
+            .level = std.posix.SOL.SOCKET,
+            .type = SCM_RIGHTS,
+        },
         .data = fd,
     };
 
@@ -259,41 +262,124 @@ fn write_control_msg(sock: std.posix.socket_t, msg_bytes: []const u8, fd: std.po
     _ = try std.posix.sendmsg(sock, &sock_msg, 0);
 }
 
-/// Create data container for control messages
+/// Create container type for control messages
 pub fn cmsg(comptime T: type) type {
-    const msg_size = cmsg_len(@sizeOf(T));
-    const padded_bit_count = ((8 * msg_size) - (@bitSizeOf(c_ulong) + (2 * @bitSizeOf(c_int)) + @bitSizeOf(T)));
+    const msg_len = cmsghdr.msg_len(@sizeOf(T));
+    const padded_bit_count = cmsghdr.padding_bits(msg_len, @bitSizeOf(T));
 
     return packed struct {
-        len: c_ulong = cmsg_len(@sizeOf(T)),
-        level: c_int,
-        type: c_int,
+        /// Control message header
+        header: cmsghdr = .{
+            .len = msg_len,
+            .level = 0,
+            .type = 0,
+        },
+        /// Data we actually want
         data: T,
-        __padding: std.meta.Int(.unsigned, padded_bit_count) = 0,
 
-        pub const Padding = padded_bit_count / 8;
-        pub const Size = msg_size;
+        /// padding to reach data alignment
+        __padding: @Type(.{
+            .int = .{
+                .bits = padded_bit_count,
+                .signedness = .unsigned,
+            },
+        }) = 0,
+
+        const cmsg_t = @This();
+        pub const Size = @sizeOf(cmsg_t);
     };
 }
 
-/// Ported version of musl libc's CMSG_ALIGN macro for getting alignment of a Control Message
-///
-/// Macro Definition:
-/// #define CMSG_ALIGN(len) (((len) + sizeof (size_t) - 1) & (size_t) ~(sizeof (size_t) - 1))
-fn cmsg_align(len: usize) usize {
-    const size_t = c_ulong;
-    return (((len) + @sizeOf(size_t) - 1) & ~(@as(usize, @sizeOf(size_t) - 1)));
-}
+const CmsgIterator = struct {
+    buf: []const u8,
+    idx: usize,
 
-/// Ported version of musl libc's CMSG_LEN macro for getting length of a Control Message
-///
-/// Macro Definition:
-/// #define CMSG_LEN(len)   (CMSG_ALIGN (sizeof (struct cmsghdr)) + (len))
-fn cmsg_len(len: usize) usize {
-    return cmsg_align(@sizeOf(c_ulong) + (2 * @sizeOf(i32)) + len);
-}
+    const Iterator = @This();
 
-fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
+    pub fn first(iter: *Iterator) ?*const cmsghdr {
+        const result: ?*const cmsghdr = if (iter.buf[iter.idx..] > @sizeOf(cmsghdr))
+            @ptrCast(@alignCast(iter.buf[iter.idx..][0..@sizeOf(cmsghdr)].ptr))
+        else
+            null;
+
+        return result;
+    }
+
+    pub fn next(iter: *Iterator) ?*const cmsghdr {
+        const result: ?*const cmsghdr = if (iter.buf[iter.idx..] > @sizeOf(cmsghdr)) ptr: { 
+            const hdr_ptr: *const cmsghdr = @ptrCast(@alignCast(iter.buf[iter.idx..][0..@sizeOf(cmsghdr)].ptr));
+            iter.idx += cmsghdr.__msg_len(hdr_ptr);
+
+            if (iter.idx >= iter.buf.len)
+                iter.idx = iter.buf.len - 1;
+
+            break :ptr hdr_ptr;
+        } else
+            null;
+
+        return result;
+    }
+
+    pub fn reset(iter: *Iterator) void {
+        iter.idx = 0;
+    }
+};
+
+pub const cmsghdr = extern struct {
+    /// Data byte count, including header
+    len: usize,
+    /// Originating protocol
+    level: i32,
+    /// Protocol-specific type
+    type: i32,
+
+    pub fn iter(buf: []const u8) CmsgIterator {
+        return .{
+            .buf = buf,
+            .idx = 0,
+        };
+    }
+
+    pub fn data(ptr: *const cmsghdr, comptime T: type) *const T {
+        const buf: [*]const u8 = @ptrCast(@alignCast(ptr));
+
+        return @ptrCast(@alignCast(buf[Size..][0..@sizeOf(T)].ptr));
+    }
+
+    /// Calculate length of control message given data of length `len`
+    ///
+    /// Port of musl libc's CMSG_LEN macro
+    ///
+    /// Macro Definition:
+    /// #define CMSG_LEN(len)   (CMSG_ALIGN (sizeof (struct cmsghdr)) + (len))
+    pub inline fn msg_len(len: usize) usize {
+        return msg_align(cmsghdr.Size + len);
+    }
+
+    pub inline fn __msg_len(msg: *const cmsghdr) usize {
+        return ((msg.len + @sizeOf(c_ulong) - 1) & ~(@sizeOf(c_ulong) - 1));
+    }
+
+    /// Get the number of bits needed to pad out the message
+    pub inline fn padding_bits(len: usize, data_t_size: usize) usize {
+        return ((@sizeOf(u8) * len) - @bitSizeOf(cmsghdr) + data_t_size);
+    }
+
+    /// Calculate alignment of control message of length `len` to cmsghdr size
+    ///
+    /// Port of musl libc's CMSG_ALIGN macro
+    ///
+    /// Macro Definition:
+    /// #define CMSG_ALIGN(len) (((len) + sizeof (size_t) - 1) & (size_t) ~(sizeof (size_t) - 1))
+    inline fn msg_align(len: usize) usize {
+        return (((len) + @sizeOf(size_t) - 1) & ~(@sizeOf(size_t) - 1));
+    }
+
+    const size_t = usize;
+    const Size = @sizeOf(@This());
+};
+
+inline fn round_up(val: anytype, mul: @TypeOf(val)) @TypeOf(val) {
     if (val == 0)
         return 0
     else

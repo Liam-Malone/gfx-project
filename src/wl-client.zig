@@ -113,7 +113,7 @@ pub var ev_iter: EventIterator = undefined;
 pub fn init(arena: *Arena, sys_ev_queue: *SysEvent.Queue) *Client {
     const client_ptr = arena.create(Client);
     const connection = open_connection: {
-        const scratch = Thread.scratch_begin(1, &.{arena}).?;
+        const scratch = Thread.scratch_begin(1, .{arena}).?;
         defer scratch.end();
         const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return @constCast(&Client.nil);
         const wayland_display = std.posix.getenv("WAYLAND_DISPLAY") orelse return @constCast(&Client.nil);
@@ -823,12 +823,10 @@ const Event = blk: {
 pub const EventIterator = struct {
     client: *Client,
     socket: std.posix.socket_t,
-    buf: []Event,
-    read: u32,
+    buf: []u8,
     write: u32,
     ev_queue: EvQueue,
     fd_queue: FdQueue,
-    read_buffer: RingBuffer,
 
     pub fn init(arena: *Arena, socket: std.posix.socket_t, size: u32) EventIterator {
         return .{
@@ -842,16 +840,32 @@ pub const EventIterator = struct {
         };
     }
 
-    pub fn next(noalias iter: *EventIterator) !?Event {
+    // NEW APPROACH TO EVENTS:
+    // - if no events present (ie, iter.first() returns `null`), caller should invoke iter.load_events()
+    // - otherwise, use while (iter.next()) for events
+    
+    /// Read from socket, to fill up ev_queue and fd_queue
+    /// 
+    /// This should only be invoked if `iter.first()` returns null;
+    pub fn load_events(iter: *EventIterator) !void {
+        // Move any data in buffer to the start
+        @memmove(iter.buf, iter.buf[0 .. iter.write]);
+        // 0 out the remaining data
+        @memset(iter.buf[iter.write..], 0);
+        iter.write = 0;
+
+
+    }
+    pub fn next(noalias iter: *EventIterator) ?Event {
         if (iter.ev_queue.first()) |event| {
             return event;
         } else {
-            var cmsg_buf: [fd_cmsg.Size * 12]u8 = undefined;
+            var cmsg_buf: [fd_msg.Size * 12]u8 = undefined;
 
             var iov = [_]std.posix.iovec{
                 .{
-                    .base = iter.read_buffer.ptr,
-                    .len = iter.read_buffer.len,
+                    .base = iter.buf.ptr,
+                    .len = iter.buf.len,
                 },
             };
 
@@ -869,35 +883,26 @@ pub const EventIterator = struct {
             if (std.posix.errno(rc) == .SUCCESS) {
                 // check for file descriptors
                 {
-                    const cmsg_size = fd_cmsg.Size;
-                    var offset: usize = 0;
-                    while (offset + cmsg_size <= message.controllen) {
-                        const ctrl_buf: [*]u8 = @ptrCast(message.control.?);
-                        const ctrl_msg: *align(1) fd_cmsg = @ptrCast(@alignCast(ctrl_buf[offset..][0..fd_cmsg.Size]));
-
-                        if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == SCM_RIGHTS) {
-                            iter.fd_queue.push(ctrl_msg.data);
+                    var cmsg_iter = cmsghdr.iter(cmsg_buf[0..message.controllen]);
+                    while (cmsg_iter.next()) |cmsg_header| {
+                        if (cmsg_header.type == std.posix.SOL.SOCKET and cmsg_header.level == SCM_RIGHTS) {
+                            iter.fd_queue.push(iter.cmsg_header.data(std.posix.fd_t).*);
                         }
                     }
-                    offset += 1;
                 }
 
                 // standard event handling
                 {
-                    var header_buf: [@sizeOf(msg.Header)]u8 = @splat(0);
-                    while (true) {
+                    var read_idx: usize = 0;
+                    while (read_idx < iter.write) {
                         const scratch = Thread.scratch_begin(0, &.{}).?;
                         defer scratch.end();
 
-                        iter.read_buffer.readBytes(&header_buf) catch break;
-                        const header: *const msg.Header = @alignCast(@ptrCast(&header_buf));
+                        const header: *const msg.Header = @alignCast(@ptrCast(&iter.buf[read_idx..][msg.Header.Size].ptr));
+                        read_idx += msg.Header.Size;
 
-                        var data_buf = scratch.arena.push(u8, header.msg_size);
-
-                        iter.read_buffer.readBytes(&data_buf) catch {
-                            log.err("Read Header, but failed to read data", .{});
-                            break;
-                        };
+                        const msg_size = header.msg_size;
+                        defer read_idx += msg_size;
 
                         @panic("TODO: Resolve event type from registry");
                         // Take type given by registry when querying with header ID
@@ -915,13 +920,13 @@ pub const EventIterator = struct {
         read: usize = 0,
         write: usize = 0,
 
-        pub fn push(noalias queue: *FdQueue, event: Event) void {
+        pub fn push(noalias queue: *EvQueue, event: Event) void {
             const write_idx = queue.write % queue.data.len;
             queue.data[write_idx] = event;
-            write_idx += 1;
+            queue.write += 1;
         }
 
-        pub fn first(noalias queue: *FdQueue) ?Event {
+        pub fn first(noalias queue: *EvQueue) ?Event {
             if (queue.read != queue.write) {
                 defer queue.read += 1;
 
@@ -943,7 +948,7 @@ pub const EventIterator = struct {
         pub fn push(noalias queue: *FdQueue, fd: std.posix.fd_t) void {
             const write_idx = queue.write % queue.data.len;
             queue.data[write_idx] = fd;
-            write_idx += 1;
+            queue.write += 1;
         }
 
         pub fn first(noalias queue: *FdQueue) ?std.posix.fd_t {
@@ -960,46 +965,9 @@ pub const EventIterator = struct {
         pub const Size = 64;
     };
 
-    const RingBuffer = struct {
-        buf: []u8,
-        read: usize,
-        write: usize,
-
-        pub fn init(buf: []u8) RingBuffer {
-            return .{
-                .buf = buf,
-                .read = 0,
-                .write = 0,
-            };
-        }
-
-        pub fn push(noalias rb: *RingBuffer, byte: u8) void {
-            defer rb.write += 1;
-
-            const write_idx = rb.write % rb.buf.len;
-            rb.buf[write_idx] = byte;
-        }
-
-        pub fn readBytes(noalias rb: *RingBuffer, buf: []u8) !void {
-            if (buf.len > rb.buf.len) {
-                return error.RequestedNLargerThanData;
-            }
-            if (rb.read + buf.len >= rb.write) {
-                return error.AttempToReadUnwrittenData;
-            }
-
-            var count: usize = 0;
-            while (count < buf.len) : (count += 1) {
-                defer rb.read += 1;
-
-                const read_idx = rb.read % rb.buf.len;
-                buf[count] = read_idx;
-            }
-        }
-    };
-
     const cmsg = msg.cmsg;
-    const fd_cmsg = cmsg(std.posix.fd_t);
+    const cmsghdr = msg.cmsghdr;
+    const fd_msg = cmsg(std.posix.fd_t);
     const SCM_RIGHTS = 0x01;
 };
 
@@ -1150,10 +1118,10 @@ const OldEvent = struct {
             }
 
             const cmsg = msg.cmsg;
-            const fd_cmsg = cmsg(std.posix.fd_t);
+            const fd_msg = cmsg(std.posix.fd_t);
             const SCM_RIGHTS = 0x01;
             fn receive_cmsg(socket: std.posix.socket_t, buf: []u8) ?std.posix.fd_t {
-                var cmsg_buf: [fd_cmsg.Size * 12]u8 = undefined;
+                var cmsg_buf: [fd_msg.Size * 12]u8 = undefined;
 
                 var iov = [_]std.posix.iovec{
                     .{
@@ -1180,11 +1148,11 @@ const OldEvent = struct {
                         log.err("recvmsg failed with err: {s}", .{@tagName(err)});
                         break :res null;
                     } else {
-                        const cmsg_size = fd_cmsg.Size;
+                        const cmsg_size = fd_msg.Size;
                         var offset: usize = 0;
                         while (offset + cmsg_size <= message.controllen) {
                             const ctrl_buf: [*]u8 = @ptrCast(message.control.?);
-                            const ctrl_msg: *align(1) fd_cmsg = @ptrCast(@alignCast(ctrl_buf[offset..][0..fd_cmsg.Size]));
+                            const ctrl_msg: *align(1) fd_msg = @ptrCast(@alignCast(ctrl_buf[offset..][0..fd_msg.Size]));
 
                             if (ctrl_msg.type == std.posix.SOL.SOCKET and ctrl_msg.level == SCM_RIGHTS)
                                 break :res ctrl_msg.data;
