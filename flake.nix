@@ -1,9 +1,10 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    zig.url = "github:mitchellh/zig-overlay";
   };
 
-  outputs = { self, nixpkgs, ... }:
+  outputs = { self, nixpkgs, zig }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forEachSupportedSystem = f: nixpkgs.lib.genAttrs supportedSystems (system: f {
@@ -14,9 +15,9 @@
       devShells = forEachSupportedSystem({ pkgs }: {
         default = pkgs.mkShell {
           packages = with pkgs; [
-            gdb
             lldb
             libinput
+            man-pages
             mesa
             shaderc
             valgrind
@@ -26,7 +27,7 @@
             vulkan-tools
             vulkan-headers
             vulkan-validation-layers
-            zig
+            zig.packages.${system}.master-2025-06-09
           ];
         };
       });
