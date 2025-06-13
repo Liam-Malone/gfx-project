@@ -128,9 +128,9 @@ pub const Registry = struct {
     pub fn init(arena: *Arena, display: wl.Display) !Registry {
         const objects = arena.push(Object, 256);
         for (objects) |*obj| {
-            obj = .{ .nil = {} };
+            obj.* = .{ .nil = {} };
         }
-        objects[1] = display;
+        objects[1] = .{ .wl_display = display };
 
         return .{
             .cur_idx = 2,
@@ -160,10 +160,14 @@ pub const Registry = struct {
         });
         self.objects[idx] = @unionInit(Object, @field(T, "Name"), .{ .id = idx });
 
-        log.debug("Interface \"{s}\" bound with id :: {d}", .{ T.name, idx });
+        log.debug("Interface \"{s}\" bound with id :: {d}", .{ T.Name, idx });
         return .{
             .id = idx,
         };
+    }
+
+    pub fn insert(self: *Registry, idx: u32, comptime T: type) !void {
+        self.objects[idx] = @unionInit(Object, @field(T, "Name"), .{ .id = idx });
     }
 
     pub fn register(self: *Registry, comptime T: type) !T {
@@ -186,7 +190,7 @@ pub const Registry = struct {
 
     pub fn remove(self: *Registry, obj: anytype) void {
         self.free_list.push(obj.id);
-        _ = self.elems.remove(obj.id);
+        self.objects[obj.id] = .{ .nil = {} };
     }
 };
 

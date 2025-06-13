@@ -27,7 +27,7 @@ pub const Thread = struct {
 
     pub fn spawn(config: SpawnConfig, function: anytype, args: anytype) SpawnError!Thread {
         return .{
-            .thread = std.Thread.spawn(config, thread_entry, .{ function, args }),
+            .thread = try std.Thread.spawn(config, thread_entry, .{ function, args }),
         };
     }
 
@@ -37,7 +37,7 @@ pub const Thread = struct {
     }
 
     pub fn scratch_begin(comptime N: comptime_int, conflicts: [N]*Arena) ?Arena.Temp {
-        var result: Arena.Temp = null;
+        var result: ?Arena.Temp = null;
         outer: for (ctx.scratch_arenas) |scratch| {
             result = scratch.temp();
             for (conflicts) |conflict| {

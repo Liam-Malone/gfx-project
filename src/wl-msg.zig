@@ -233,13 +233,11 @@ fn write_float(writer: anytype, float: f32) !void {
 }
 
 fn write_control_msg(sock: std.posix.socket_t, msg_bytes: []const u8, fd: std.posix.fd_t) !void {
-    const control_msg: cmsg(@TypeOf(fd)) = .{
-        .header = .{
-            .level = std.posix.SOL.SOCKET,
-            .type = SCM_RIGHTS,
-        },
-        .data = fd,
-    };
+    const control_msg: cmsg(@TypeOf(fd)) = .init(
+        std.posix.SOL.SOCKET,
+        SCM_RIGHTS,
+        fd,
+    );
 
     const iov = [_]std.posix.iovec_const{
         .{
@@ -269,11 +267,7 @@ pub fn cmsg(comptime T: type) type {
 
     return packed struct {
         /// Control message header
-        header: cmsghdr = .{
-            .len = msg_len,
-            .level = 0,
-            .type = 0,
-        },
+        header: cmsghdr,
         /// Data we actually want
         data: T,
 
@@ -285,8 +279,20 @@ pub fn cmsg(comptime T: type) type {
             },
         }) = 0,
 
-        const cmsg_t = @This();
+        pub fn init(level: i32, @"type": i32, data: T) cmsg_t {
+            return .{
+                .header = .{
+                    .len = msg_len,
+                    .level = level,
+                    .type = @"type",
+                },
+                .data = data,
+            };
+        }
+
         pub const Size = @sizeOf(cmsg_t);
+
+        const cmsg_t = @This();
     };
 }
 
@@ -296,24 +302,24 @@ const CmsgIterator = struct {
 
     const Iterator = @This();
 
-    pub fn first(iter: *Iterator) ?*const cmsghdr {
-        const result: ?*const cmsghdr = if (iter.buf[iter.idx..] > @sizeOf(cmsghdr))
-            @ptrCast(@alignCast(iter.buf[iter.idx..][0..@sizeOf(cmsghdr)].ptr))
+    pub fn first(iter: *Iterator) ?cmsghdr {
+        const result: ?cmsghdr = if (iter.buf[iter.idx..].len > @sizeOf(cmsghdr))
+            std.mem.bytesToValue(cmsghdr, iter.buf[iter.idx..][0..@sizeOf(cmsghdr)])
         else
             null;
 
         return result;
     }
 
-    pub fn next(iter: *Iterator) ?*const cmsghdr {
-        const result: ?*const cmsghdr = if (iter.buf[iter.idx..] > @sizeOf(cmsghdr)) ptr: { 
-            const hdr_ptr: *const cmsghdr = @ptrCast(@alignCast(iter.buf[iter.idx..][0..@sizeOf(cmsghdr)].ptr));
-            iter.idx += cmsghdr.__msg_len(hdr_ptr);
+    pub fn next(iter: *Iterator) ?cmsghdr {
+        const result: ?cmsghdr = if (iter.buf[iter.idx..].len > @sizeOf(cmsghdr)) hdr: { 
+            const hdr = std.mem.bytesToValue(cmsghdr, iter.buf[iter.idx..][0..@sizeOf(cmsghdr)]);
+            iter.idx += cmsghdr.__msg_len(&hdr);
 
             if (iter.idx >= iter.buf.len)
                 iter.idx = iter.buf.len - 1;
 
-            break :ptr hdr_ptr;
+            break :hdr hdr;
         } else
             null;
 
@@ -325,7 +331,7 @@ const CmsgIterator = struct {
     }
 };
 
-pub const cmsghdr = extern struct {
+pub const cmsghdr = packed struct {
     /// Data byte count, including header
     len: usize,
     /// Originating protocol
@@ -357,12 +363,12 @@ pub const cmsghdr = extern struct {
     }
 
     pub inline fn __msg_len(msg: *const cmsghdr) usize {
-        return ((msg.len + @sizeOf(c_ulong) - 1) & ~(@sizeOf(c_ulong) - 1));
+        return ((msg.len + @sizeOf(c_ulong) - 1) & ~@as(usize, (@sizeOf(c_ulong) - 1)));
     }
 
     /// Get the number of bits needed to pad out the message
     pub inline fn padding_bits(len: usize, data_t_size: usize) usize {
-        return ((@sizeOf(u8) * len) - @bitSizeOf(cmsghdr) + data_t_size);
+        return (8 * len) - (@bitSizeOf(cmsghdr) + data_t_size);
     }
 
     /// Calculate alignment of control message of length `len` to cmsghdr size
@@ -372,7 +378,7 @@ pub const cmsghdr = extern struct {
     /// Macro Definition:
     /// #define CMSG_ALIGN(len) (((len) + sizeof (size_t) - 1) & (size_t) ~(sizeof (size_t) - 1))
     inline fn msg_align(len: usize) usize {
-        return (((len) + @sizeOf(size_t) - 1) & ~(@sizeOf(size_t) - 1));
+        return (((len) + @sizeOf(size_t) - 1) & ~@as(usize, (@sizeOf(size_t) - 1)));
     }
 
     const size_t = usize;
